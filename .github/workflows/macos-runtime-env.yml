@@ -23,7 +23,7 @@ on:
       - .github/workflows/macos-runtime-env.yml
   push:
     tags:
-      - "v*"
+      - "runtime-v*"
 
 permissions:
   contents: read
@@ -193,10 +193,11 @@ jobs:
           cargo check --locked -p wealthfolio-app --target aarch64-apple-darwin
 
   attach-release:
-    # On v* tags, attach the runtime-env tarballs to the (draft) GitHub Release
-    # that release.yml creates, so they ship alongside the DMGs automatically.
+    # On runtime-v* tags, attach the runtime-env tarballs to the Release
+    # for that tag (created if missing), so they ship without ever running
+    # the stock release.yml desktop/signing pipeline.
     name: Attach packages to Release
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/runtime-v')
     needs: [build]
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -216,10 +217,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # release.yml creates the draft release on the same tag push; wait for it.
-          for _ in $(seq 1 30); do
-            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then break; fi
-            sleep 20
-          done
-          gh release view "$GITHUB_REF_NAME" >/dev/null
-          gh release upload "$GITHUB_REF_NAME" dist-release/* --clobber
+          TAG="$GITHUB_REF_NAME"
+          # A runtime-v* tag never triggers release.yml, so no Release exists
+          # yet: create it as a draft on first use, reuse afterwards.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            VERSION="${TAG#runtime-}"
+            gh release create "$TAG" --draft \
+              --title "Runtime $VERSION" \
+              --notes "macOS server packages with external runtime-env file support. See docs/runtime-env.md."
+          fi
+          gh release upload "$TAG" dist-release/* --clobber
