@@ -21,6 +21,9 @@ on:
       - packaging/macos/wealthfolio.env.example
       - docs/runtime-env.md
       - .github/workflows/macos-runtime-env.yml
+  push:
+    tags:
+      - "v*"
 
 permissions:
   contents: read
@@ -188,3 +191,35 @@ jobs:
           mkdir -p dist
           printf '<!DOCTYPE html><html></html>' > dist/index.html
           cargo check --locked -p wealthfolio-app --target aarch64-apple-darwin
+
+  attach-release:
+    # On v* tags, attach the runtime-env tarballs to the (draft) GitHub Release
+    # that release.yml creates, so they ship alongside the DMGs automatically.
+    name: Attach packages to Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: wealthfolio-macos-runtime-env-*
+          merge-multiple: true
+          path: dist-release
+
+      - name: Upload to Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # release.yml creates the draft release on the same tag push; wait for it.
+          for _ in $(seq 1 30); do
+            if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then break; fi
+            sleep 20
+          done
+          gh release view "$GITHUB_REF_NAME" >/dev/null
+          gh release upload "$GITHUB_REF_NAME" dist-release/* --clobber
