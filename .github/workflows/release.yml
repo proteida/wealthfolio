@@ -138,8 +138,11 @@ jobs:
             const c = JSON.parse(fs.readFileSync(p, 'utf8'));
             let changed = false;
             if ('${{ steps.signing.outputs.tauri }}' !== 'true' && c.plugins && c.plugins.updater) {
-              delete c.plugins.updater.pubkey;
-              c.plugins.updater.active = false;
+              // The updater schema REQUIRES pubkey whenever the section exists
+              // (active:false still parses it), so the whole section goes.
+              // Unsigned fork builds lose in-app auto-update; documented.
+              delete c.plugins.updater;
+              if (Object.keys(c.plugins).length === 0) delete c.plugins;
               changed = true;
             }
             if ('${{ steps.signing.outputs.apple }}' !== 'true' && c.bundle && c.bundle.macOS) {
