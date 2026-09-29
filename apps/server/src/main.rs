@@ -102,6 +102,9 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::from_env()?;
     init_tracing();
+    // The loader runs before any log backend exists, so re-emit the resolved
+    // per-key sources now that debug logs are visible.
+    wealthfolio_core::runtime_env::log_last_report();
     // Bind before starting database workers so a port conflict cannot strand them.
     let listener = tokio::net::TcpListener::bind(config.listen_addr).await?;
 

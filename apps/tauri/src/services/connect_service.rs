@@ -26,28 +26,41 @@ pub fn is_cloud_sync_enabled() -> bool {
     is_connect_sync_enabled() || is_device_sync_enabled()
 }
 
+/// Runtime env (process or the external `wealthfolio.env` file loaded at
+/// startup) wins; the compile-time baked value is the fallback so existing
+/// builds keep working unchanged.
+fn runtime_or_baked(key: &str, baked: Option<&str>) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| baked.map(str::to_string))
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 /// Returns the cloud API base URL when a sync feature is enabled.
 pub fn cloud_api_base_url() -> Option<String> {
     if !is_cloud_sync_enabled() {
         return None;
     }
 
-    option_env!("CONNECT_API_URL")
-        .map(|v| v.trim().trim_end_matches('/').to_string())
-        .filter(|v| !v.is_empty())
+    runtime_or_baked("CONNECT_API_URL", option_env!("CONNECT_API_URL"))
+        .map(|url| url.trim_end_matches('/').to_string())
+        .filter(|url| !url.is_empty())
         .or_else(|| Some(DEFAULT_CLOUD_API_URL.to_string()))
 }
 
 fn connect_auth_url() -> Option<String> {
-    option_env!("CONNECT_AUTH_URL")
-        .map(|v| v.trim().trim_end_matches('/').to_string())
-        .filter(|v| !v.is_empty())
+    runtime_or_baked("CONNECT_AUTH_URL", option_env!("CONNECT_AUTH_URL"))
+        .map(|url| url.trim_end_matches('/').to_string())
+        .filter(|url| !url.is_empty())
 }
 
 fn connect_auth_publishable_key() -> Option<String> {
-    option_env!("CONNECT_AUTH_PUBLISHABLE_KEY")
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
+    runtime_or_baked(
+        "CONNECT_AUTH_PUBLISHABLE_KEY",
+        option_env!("CONNECT_AUTH_PUBLISHABLE_KEY"),
+    )
 }
 
 fn token_lifecycle_config() -> Option<TokenLifecycleConfig> {

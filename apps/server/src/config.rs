@@ -51,6 +51,12 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
+        // External runtime env file first (e.g.
+        // ~/Library/Application Support/com.teymz.wealthfolio/wealthfolio.env
+        // on macOS): it seeds defaults that the process environment and the
+        // CWD `.env` below still override. Missing file is fine; a malformed
+        // line aborts startup naming file:line.
+        wealthfolio_core::runtime_env::load()?;
         dotenvy::dotenv().ok();
         let listen_addr: SocketAddr = std::env::var("WF_LISTEN_ADDR")
             .unwrap_or_else(|_| "0.0.0.0:8088".to_string())

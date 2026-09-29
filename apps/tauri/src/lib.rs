@@ -191,6 +191,14 @@ fn get_app_data_dir(handle: &AppHandle) -> Result<String, Box<dyn std::error::Er
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // External runtime env file (e.g.
+    // ~/Library/Application Support/com.teymz.wealthfolio/wealthfolio.env on
+    // macOS): user-editable without rebuilds. Missing file is fine; a
+    // malformed line is fatal and names file:line.
+    if let Err(error) = wealthfolio_core::runtime_env::load() {
+        eprintln!("Wealthfolio: invalid runtime env file: {error:#}");
+        std::process::exit(1);
+    }
     dotenv().ok();
 
     let builder = tauri::Builder::default();
@@ -233,6 +241,9 @@ pub fn run() {
     builder
         .setup(|app| {
             let handle = app.handle().clone();
+            // The loader ran before the log plugin existed; re-emit the
+            // resolved per-key sources now that debug logs are visible.
+            wealthfolio_core::runtime_env::log_last_report();
 
             // Embedded MCP server state (commands need it managed up front)
             handle.manage(mcp::McpServerState::default());

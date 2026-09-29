@@ -1,0 +1,190 @@
+name: macOS Runtime Env
+
+# Additive CI for the external runtime-env layer (crates/core/src/runtime_env.rs,
+# docs/runtime-env.md). Touches no existing workflow: it builds, packages, and
+# smoke-tests on its own triggers only.
+#
+# Arch strategy: per-arch matrix (aarch64 + x86_64), NOT a universal binary.
+# This mirrors release.yml's per-arch artifacts and avoids lipo/universal
+# signing complexity. The smoke test can only execute natively, so it runs on
+# the aarch64 leg; the x86_64 leg proves the build.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - crates/core/src/runtime_env.rs
+      - apps/server/src/config.rs
+      - apps/server/src/main.rs
+      - apps/tauri/src/lib.rs
+      - apps/tauri/src/services/connect_service.rs
+      - packaging/macos/wealthfolio.env.example
+      - docs/runtime-env.md
+      - .github/workflows/macos-runtime-env.yml
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build + smoke (macOS ${{ matrix.target }})
+    runs-on: macos-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            smoke: true
+          - target: x86_64-apple-darwin
+            smoke: false
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Rust setup
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos-runtime-env-${{ matrix.target }}
+          save-if: ${{ github.event_name != 'pull_request' }}
+
+      - name: Verify vendored OpenSSL Perl prerequisite
+        shell: bash
+        run: perl -v
+
+      - name: Build server binary
+        run: cargo build --locked --release -p wealthfolio-server --target ${{ matrix.target }}
+
+      - name: Stage macOS package (binary + env skeleton, no secrets)
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="target/${{ matrix.target }}/release/wealthfolio-server"
+          test -x "$BIN"
+          VERSION=$(node -p "require('./apps/tauri/tauri.conf.json').version")
+          STAGE="wealthfolio-macos-runtime-env-${VERSION}-${{ matrix.target }}"
+          echo "PACKAGE=$STAGE" >> "$GITHUB_ENV"
+          rm -rf "$STAGE" && mkdir -p "$STAGE"
+          cp "$BIN" "$STAGE/wealthfolio-server"
+          cp packaging/macos/wealthfolio.env.example "$STAGE/wealthfolio.env.example"
+          cp LICENSE "$STAGE/LICENSE"
+          # The skeleton must not contain an active secret.
+          if grep -Eq '^[[:space:]]*WF_SECRET_KEY=.+' "$STAGE/wealthfolio.env.example"; then
+            echo "::error::skeleton env file contains an uncommented WF_SECRET_KEY"
+            exit 1
+          fi
+          tar -czf "$STAGE.tar.gz" "$STAGE"
+          shasum -a 256 "$STAGE.tar.gz" > "$STAGE.tar.gz.sha256"
+
+      - name: Smoke-test runtime env file (no rebuild between phases)
+        if: matrix.smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="$PWD/target/${{ matrix.target }}/release/wealthfolio-server"
+          SMOKE=$(mktemp -d)
+          trap 'if [ -n "${SERVER_PID:-}" ]; then kill "$SERVER_PID" 2>/dev/null || true; fi; rm -rf "$SMOKE"' EXIT
+          mkdir -p "$SMOKE/static"
+          echo '<!DOCTYPE html><html><head></head><body></body></html>' > "$SMOKE/static/index.html"
+          SECRET=$(python3 -c "import base64; print(base64.b64encode(b'a' * 32).decode())")
+          ENV_FILE="$SMOKE/wealthfolio.env"
+          {
+            echo "WF_SECRET_KEY=$SECRET"
+            echo "WF_LISTEN_ADDR=127.0.0.1:18091"
+            echo "WF_DB_PATH=$SMOKE/app.db"
+            echo "WF_STATIC_DIR=$SMOKE/static"
+            echo "RUST_LOG=debug"
+          } > "$ENV_FILE"
+
+          start_server() {
+            WF_ENV_FILE="$ENV_FILE" "$BIN" > "$SMOKE/server.log" 2>&1 &
+            SERVER_PID=$!
+          }
+          wait_for() {
+            local port="$1"
+            for _ in $(seq 1 120); do
+              if curl -fsS --max-time 2 "http://127.0.0.1:$port/api/v1/healthz" > /dev/null 2>&1; then
+                return 0
+              fi
+              if ! kill -0 "$SERVER_PID" 2>/dev/null; then
+                echo "::error::server exited during startup; log:"; cat "$SMOKE/server.log"; return 1
+              fi
+              sleep 0.5
+            done
+            echo "::error::server never became healthy on port $port; log:"; cat "$SMOKE/server.log"; return 1
+          }
+          stop_server() { kill "$SERVER_PID" 2>/dev/null || true; wait "$SERVER_PID" 2>/dev/null || true; }
+
+          # Phase 1: values come from the file.
+          start_server
+          wait_for 18091
+          grep -q "runtime-env: 'WF_LISTEN_ADDR' resolved from file" "$SMOKE/server.log"
+          echo "PASS phase 1: file-provided WF_LISTEN_ADDR serves traffic"
+          stop_server
+
+          # Phase 2: edit the file, restart (no rebuild), new values apply.
+          sed -i '' 's/18091/18092/' "$ENV_FILE"
+          start_server
+          wait_for 18092
+          if curl -fsS --max-time 2 "http://127.0.0.1:18091/api/v1/healthz" > /dev/null 2>&1; then
+            echo "::error::old port still serves after file edit + restart"; return 1
+          fi
+          echo "PASS phase 2: file edit + restart picks up new values without rebuild"
+          stop_server
+
+          # Phase 3: process env beats the file.
+          WF_ENV_FILE="$ENV_FILE" WF_LISTEN_ADDR="127.0.0.1:18093" "$BIN" > "$SMOKE/server.log" 2>&1 &
+          SERVER_PID=$!
+          wait_for 18093
+          echo "PASS phase 3: process env takes precedence over the file"
+          stop_server
+
+          # Phase 4: malformed line is a startup error naming file:line.
+          printf 'THIS IS NOT VALID\n' >> "$ENV_FILE"
+          set +e
+          WF_ENV_FILE="$ENV_FILE" "$BIN" > "$SMOKE/bad.log" 2>&1
+          STATUS=$?
+          set -e
+          if [ "$STATUS" -eq 0 ]; then echo "::error::malformed env file was accepted"; return 1; fi
+          grep -Eq "wealthfolio.env:[0-9]+:" "$SMOKE/bad.log"
+          echo "PASS phase 4: malformed line fails startup naming file:line"
+
+      - name: Upload macOS package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}
+          path: |
+            ${{ env.PACKAGE }}.tar.gz
+            ${{ env.PACKAGE }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  desktop-check:
+    # The desktop app reads the same loader via wealthfolio-core; a full .app
+    # build is covered by release.yml, so this job only proves the wiring
+    # compiles for the macOS target.
+    name: Desktop wiring check
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: macos-runtime-env-desktop
+          save-if: ${{ github.event_name != 'pull_request' }}
+      - name: Check desktop compilation
+        run: |
+          mkdir -p dist
+          printf '<!DOCTYPE html><html></html>' > dist/index.html
+          cargo check --locked -p wealthfolio-app --target aarch64-apple-darwin
