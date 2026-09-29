@@ -98,8 +98,35 @@ jobs:
           ")
           echo "args=$ARGS" >> "$GITHUB_OUTPUT"
 
+      # Fork-safe signing: empty secrets are NEVER exported (an empty
+      # TAURI_SIGNING_PRIVATE_KEY / APPLE_CERTIFICATE makes the bundler fail
+      # decoding instead of skipping). Absent keys => unsigned bundles.
+      - name: Detect signing secrets
+        id: signing
+        shell: bash
+        run: |
+          echo "tauri=${{ secrets.TAURI_PRIVATE_KEY != '' }}" >> "$GITHUB_OUTPUT"
+          echo "apple=${{ secrets.APPLE_CERTIFICATE != '' }}" >> "$GITHUB_OUTPUT"
+
+      - name: Export signing secrets (present only)
+        shell: bash
+        run: |
+          if [ "${{ steps.signing.outputs.tauri }}" = true ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY=${{ secrets.TAURI_PRIVATE_KEY }}" >> "$GITHUB_ENV"
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${{ secrets.TAURI_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+          fi
+          if [ "${{ steps.signing.outputs.apple }}" = true ]; then
+            echo "APPLE_CERTIFICATE=${{ secrets.APPLE_CERTIFICATE }}" >> "$GITHUB_ENV"
+            echo "APPLE_CERTIFICATE_PASSWORD=${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "APPLE_SIGNING_IDENTITY=${{ secrets.APPLE_SIGNING_IDENTITY }}" >> "$GITHUB_ENV"
+            echo "APPLE_API_ISSUER=${{ secrets.APPLE_API_ISSUER }}" >> "$GITHUB_ENV"
+            echo "APPLE_API_KEY=${{ secrets.APPLE_API_KEY }}" >> "$GITHUB_ENV"
+            echo "APPLE_API_KEY_PATH=${{ runner.temp }}/asc.p8" >> "$GITHUB_ENV"
+            echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}" >> "$GITHUB_ENV"
+          fi
+
       - name: Materialize App Store Connect API key (macOS notarization)
-        if: contains(matrix.platform, 'macos')
+        if: contains(matrix.platform, 'macos') && steps.signing.outputs.apple == 'true'
         shell: bash
         run: printf '%s' "${{ secrets.APPLE_API_KEY_P8 }}" > "$RUNNER_TEMP/asc.p8"
 
@@ -113,15 +140,6 @@ jobs:
           CONNECT_API_URL: ${{ vars.CONNECT_API_URL }}
           CONNECT_OAUTH_CALLBACK_URL: ${{ vars.CONNECT_OAUTH_CALLBACK_URL }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_PATH: ${{ runner.temp }}/asc.p8
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
         with:
           tagName: ${{ github.event_name == 'push' && github.ref_name || '' }}
           releaseName: ${{ github.event_name == 'push' && 'Wealthfolio v__VERSION__' || '' }}
@@ -134,7 +152,7 @@ jobs:
       # on the app bundle; macos/dmg/mod.rs just codesigns the disk image), so the
       # DMG ships without a stapled ticket unless we submit it ourselves here.
       - name: Notarize and staple macOS DMGs (disk-image ticket)
-        if: contains(matrix.platform, 'macos')
+        if: contains(matrix.platform, 'macos') && steps.signing.outputs.apple == 'true'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
