@@ -143,6 +143,8 @@ jobs:
               // Unsigned fork builds lose in-app auto-update; documented.
               delete c.plugins.updater;
               if (Object.keys(c.plugins).length === 0) delete c.plugins;
+              // v1Compatible artifacts demand an updater section too.
+              if (c.bundle) c.bundle.createUpdaterArtifacts = false;
               changed = true;
             }
             if ('${{ steps.signing.outputs.apple }}' !== 'true' && c.bundle && c.bundle.macOS) {
