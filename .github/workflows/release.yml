@@ -125,6 +125,31 @@ jobs:
             echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}" >> "$GITHUB_ENV"
           fi
 
+      - name: Strip signing demands when keys absent (unsigned fork build)
+        # tauri.conf.json itself stays untouched (no extra merge surface):
+        # when a key is missing we remove the config that demands it, so the
+        # bundler builds unsigned instead of failing. With keys present the
+        # config is left intact and the build signs exactly like upstream.
+        shell: bash
+        run: |
+          node -e "
+            const fs = require('fs');
+            const p = './apps/tauri/tauri.conf.json';
+            const c = JSON.parse(fs.readFileSync(p, 'utf8'));
+            let changed = false;
+            if ('${{ steps.signing.outputs.tauri }}' !== 'true' && c.plugins && c.plugins.updater) {
+              delete c.plugins.updater.pubkey;
+              c.plugins.updater.active = false;
+              changed = true;
+            }
+            if ('${{ steps.signing.outputs.apple }}' !== 'true' && c.bundle && c.bundle.macOS) {
+              delete c.bundle.macOS.signingIdentity;
+              changed = true;
+            }
+            if (changed) fs.writeFileSync(p, JSON.stringify(c, null, 2) + '\n');
+            console.log(changed ? 'tauri.conf.json patched for unsigned build' : 'signing keys present; config untouched');
+          "
+
       - name: Materialize App Store Connect API key (macOS notarization)
         if: contains(matrix.platform, 'macos') && steps.signing.outputs.apple == 'true'
         shell: bash
