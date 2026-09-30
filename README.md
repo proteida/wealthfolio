@@ -450,6 +450,16 @@ WF_LISTEN_ADDR=127.0.0.1:8088 WF_DB_PATH=./db/app.db cargo run --manifest-path a
 See [Web Mode Configuration](#configuration) for a complete list of supported
 environment variables.
 
+> **Runtime env file (desktop + native server):** instead of exporting
+> variables, put them in `wealthfolio.env` — no rebuild needed, edit + restart
+> picks up changes. Lookup order: `$WF_ENV_FILE` →
+> `~/Library/Application Support/com.teymz.wealthfolio/wealthfolio.env`
+> (macOS; `~/.config/...` on Linux, `%APPDATA%\...` on Windows) →
+> `wealthfolio.env` next to the executable. Process env beats the file;
+> built-in defaults apply otherwise. Copy
+> `packaging/macos/wealthfolio.env.example` to the app-support path to start.
+> Full format, precedence, and error behavior: [docs/runtime-env.md](docs/runtime-env.md).
+
 ## Docker
 
 You can either pull the official Docker image or build it yourself locally.
