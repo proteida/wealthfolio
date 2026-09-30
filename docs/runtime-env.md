@@ -57,6 +57,25 @@ Desktop note: `CONNECT_AUTH_URL` / `CONNECT_AUTH_PUBLISHABLE_KEY` /
 process env) now overrides them at runtime, so Connect endpoints can move
 without a rebuild.
 
+## Runtime Connect endpoints (no rebuild)
+
+The browser client fetches `GET /api/v1/client-config` at boot. Set any of
+these in `wealthfolio.env` (each also honors its bare `CONNECT_*` twin, with
+`WF_CONNECT_*` winning when both are set):
+
+| Variable | Effect |
+| -------- | ------ |
+| `WF_CONNECT_AUTH_URL` | Supabase-compatible auth host for login |
+| `WF_CONNECT_AUTH_PUBLISHABLE_KEY` | Auth publishable key (public by design) |
+| `WF_CONNECT_API_URL` | Connector/cloud data API base |
+| `WF_CONNECT_OAUTH_CALLBACK_URL` | Hosted OAuth bounce page |
+
+Setting auth URL + key switches Connect on even in a build that baked nothing
+in (the "Not Configured" screen disappears after the fetch). Anything unset
+falls back to the baked-in build value, then to the cloud defaults. The
+endpoint is public (the login screen needs it pre-auth) and serves no secrets.
+Custom hosts are automatically added to the CSP `connect-src` allowlist.
+
 ## Restart requirement
 
 Values are read once at startup. **Edit the file, then fully quit and relaunch

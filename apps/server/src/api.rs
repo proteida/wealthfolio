@@ -47,6 +47,7 @@ mod device_sync;
 pub(crate) mod device_sync_engine;
 mod exchange_rates;
 mod goals;
+mod client_config;
 mod health;
 mod holdings;
 mod limits;
@@ -90,15 +91,35 @@ pub async fn security_headers(request: Request<Body>, next: Next) -> Response {
     let path = request.uri().path().to_string();
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
-    let csp = if path.ends_with("/addon-sandbox.html") {
-        ADDON_SANDBOX_CSP
+    // A self-hosted Connect host must be fetchable from the browser: extend
+    // connect-src with the runtime origins (no-op when unconfigured).
+    let csp_value = if path.ends_with("/addon-sandbox.html") {
+        None
     } else {
-        SERVER_CSP
+        let extra = client_config::extra_csp_connect_sources();
+        (!extra.is_empty()).then(|| {
+            SERVER_CSP.replacen(
+                "connect-src 'self'",
+                &format!("connect-src 'self' {}", extra.join(" ")),
+                1,
+            )
+        })
     };
-    headers.insert(
-        HeaderName::from_static("content-security-policy"),
-        HeaderValue::from_static(csp),
-    );
+    let csp_header = csp_value
+        .as_deref()
+        .and_then(|v| HeaderValue::from_str(v).ok())
+        .unwrap_or_else(|| HeaderValue::from_static(SERVER_CSP));
+    if path.ends_with("/addon-sandbox.html") {
+        headers.insert(
+            HeaderName::from_static("content-security-policy"),
+            HeaderValue::from_static(ADDON_SANDBOX_CSP),
+        );
+    } else {
+        headers.insert(
+            HeaderName::from_static("content-security-policy"),
+            csp_header,
+        );
+    }
     if !path.starts_with("/api/") && !path.starts_with("/mcp") {
         headers.insert(
             HeaderName::from_static("access-control-allow-origin"),
@@ -226,6 +247,8 @@ fn app_router_with_profiles(
     let api = Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
+        // Public: the login screen needs the runtime Connect endpoints pre-auth.
+        .merge(client_config::router())
         .merge(auth::router(auth_state))
         .merge(protected_api)
         .with_state(());

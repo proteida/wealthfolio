@@ -66,6 +66,7 @@ fn test_config(path: &std::path::Path) -> Config {
         mcp_enabled: false,
         mcp_audit_enabled: false,
         mcp_allowed_hosts: None,
+        connect_client: wealthfolio_server::config::connect_client_config(),
     }
 }
 

@@ -42,6 +42,7 @@ async fn connect_test_app() -> (
         mcp_enabled: false,
         mcp_audit_enabled: false,
         mcp_allowed_hosts: None,
+        connect_client: crate::config::connect_client_config(),
     };
     let state = crate::build_state(&config).await.unwrap();
     let root = WebProfiles::new(state.clone(), &config).unwrap();

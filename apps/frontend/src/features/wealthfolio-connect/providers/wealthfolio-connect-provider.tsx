@@ -19,6 +19,14 @@ import {
 import { useAuth } from "@/context/auth-context";
 import { getPlatform } from "@/hooks/use-platform";
 import { CONNECT_ENABLED } from "@/lib/connect-config";
+import {
+  getRuntimeConnectConfig,
+  isRuntimeConnectConfigured,
+  loadConnectRuntimeConfig,
+  resolveAuthPublishableKey,
+  resolveAuthUrl,
+  resolveOAuthCallbackUrl,
+} from "@/lib/connect-runtime-config";
 import { QueryKeys } from "@/lib/query-keys";
 import { useQueryClient } from "@tanstack/react-query";
 import { createClient, Session, SupabaseClient, User } from "@supabase/supabase-js";
@@ -52,11 +60,31 @@ import { parseAuthCallbackUrl } from "../lib/auth-callback";
 import { hasBrokerSync, isSubscriptionStatusActive } from "../lib/plan-capabilities";
 
 // Auth configuration - these are public/publishable keys (safe for client-side)
+// Baked build values; a runtime override from GET /api/v1/client-config
+// (WF_CONNECT_* in wealthfolio.env) wins when present — see resolvers below.
 // Can be overridden via environment variables: CONNECT_AUTH_URL and CONNECT_AUTH_PUBLISHABLE_KEY
-const AUTH_URL = (import.meta.env.CONNECT_AUTH_URL as string) || "https://auth.wealthfolio.app";
-const AUTH_PUBLISHABLE_KEY =
-  (import.meta.env.CONNECT_AUTH_PUBLISHABLE_KEY as string) ||
-  "sb_publishable_ZSZbXNtWtnh9i2nqJ2UL4A_NV8ZVutd";
+const BAKED_AUTH_URL = (import.meta.env.CONNECT_AUTH_URL as string) || undefined;
+const BAKED_AUTH_PUBLISHABLE_KEY =
+  (import.meta.env.CONNECT_AUTH_PUBLISHABLE_KEY as string) || undefined;
+
+// For OAuth on desktop, we use a hosted callback page that redirects to the deep link
+// This is necessary because browsers block direct navigation to custom URL schemes
+// Uses env variable in dev, falls back to production URL for bundled builds
+const BAKED_OAUTH_CALLBACK_URL =
+  (import.meta.env.CONNECT_OAUTH_CALLBACK_URL as string) || undefined;
+
+const getAuthUrl = () =>
+  resolveAuthUrl(getRuntimeConnectConfig(), {
+    authUrl: BAKED_AUTH_URL,
+  });
+const getAuthPublishableKey = () =>
+  resolveAuthPublishableKey(getRuntimeConnectConfig(), {
+    authPublishableKey: BAKED_AUTH_PUBLISHABLE_KEY,
+  });
+const getHostedOAuthCallbackUrl = () =>
+  resolveOAuthCallbackUrl(getRuntimeConnectConfig(), {
+    oauthCallbackUrl: BAKED_OAUTH_CALLBACK_URL,
+  });
 
 // Deep-link URL for desktop callbacks (custom URL scheme)
 const DESKTOP_DEEP_LINK_URL = "wealthfolio://auth/callback";
@@ -66,15 +94,8 @@ const getWebRedirectUrl = () => {
   return `${window.location.origin}/auth/callback`;
 };
 
-// For OAuth on desktop, we use a hosted callback page that redirects to the deep link
-// This is necessary because browsers block direct navigation to custom URL schemes
-// Uses env variable in dev, falls back to production URL for bundled builds
-const HOSTED_OAUTH_CALLBACK_URL =
-  (import.meta.env.CONNECT_OAUTH_CALLBACK_URL as string) ||
-  "https://connect.wealthfolio.app/deeplink";
-
 const parseConfiguredAuthCallbackUrl = (url: string) =>
-  parseAuthCallbackUrl(url, { hostedCallbackUrl: HOSTED_OAUTH_CALLBACK_URL });
+  parseAuthCallbackUrl(url, { hostedCallbackUrl: getHostedOAuthCallbackUrl() });
 
 const PROCESSED_AUTH_CODE_TTL_MS = 10 * 60 * 1000;
 const MAX_PROCESSED_AUTH_CODES = 20;
@@ -161,8 +182,9 @@ function getAuthStorageKey(supabaseUrl: string): string {
 
 // Create a Supabase client with custom storage for persistent auth
 const createSupabaseClient = () => {
-  const storageKey = getAuthStorageKey(AUTH_URL);
-  return createClient(AUTH_URL, AUTH_PUBLISHABLE_KEY, {
+  const authUrl = getAuthUrl();
+  const storageKey = getAuthStorageKey(authUrl);
+  return createClient(authUrl, getAuthPublishableKey(), {
     auth: {
       storageKey,
       storage: createProfilePkceStorage(storageKey),
@@ -645,7 +667,7 @@ function EnabledWealthfolioConnectProvider({ children }: { children: ReactNode }
         const redirectUrl = useNativeMobileWebAuth
           ? DESKTOP_DEEP_LINK_URL // Mobile: direct custom scheme, captured by native web auth
           : isTauri && import.meta.env.PROD
-            ? HOSTED_OAUTH_CALLBACK_URL // Hosted bounce preserves the profile flow fragment
+            ? getHostedOAuthCallbackUrl() // Hosted bounce preserves the profile flow fragment
             : getWebRedirectUrl(); // Web or dev mode
 
         const useSystemBrowser = isTauri && import.meta.env.PROD && !useNativeMobileWebAuth;
@@ -716,7 +738,7 @@ function EnabledWealthfolioConnectProvider({ children }: { children: ReactNode }
         const redirectUrl =
           isTauri && import.meta.env.PROD
             ? isMobile
-              ? HOSTED_OAUTH_CALLBACK_URL // Hosted bounce preserves the profile flow fragment
+              ? getHostedOAuthCallbackUrl() // Hosted bounce preserves the profile flow fragment
               : DESKTOP_DEEP_LINK_URL // Desktop: direct wealthfolio:// from email client
             : getWebRedirectUrl();
 
@@ -970,9 +992,33 @@ function EnabledWealthfolioConnectProvider({ children }: { children: ReactNode }
 export function WealthfolioConnectProvider({ children }: { children: ReactNode }) {
   const [isCapabilityCheckComplete, setIsCapabilityCheckComplete] = useState(!CONNECT_ENABLED);
   const [isCloudSyncAvailable, setIsCloudSyncAvailable] = useState(false);
+  const [isRuntimeEnabled, setIsRuntimeEnabled] = useState(false);
+  // Baked build config OR a runtime override (WF_CONNECT_* via
+  // GET /api/v1/client-config): either can switch Connect on.
+  const enabled = CONNECT_ENABLED || isRuntimeEnabled;
 
   useEffect(() => {
-    if (!CONNECT_ENABLED) return;
+    let cancelled = false;
+    // Offline-first: any failure leaves the baked values in charge.
+    void loadConnectRuntimeConfig().then((cfg) => {
+      if (cancelled) return;
+      if (isRuntimeConnectConfigured(cfg)) {
+        // Recheck capabilities under the runtime config (the baked path
+        // may have completed instantly as "disabled").
+        setIsCapabilityCheckComplete(false);
+        setIsRuntimeEnabled(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!enabled) {
+      setIsCapabilityCheckComplete(true);
+      return;
+    }
 
     let cancelled = false;
 
@@ -996,11 +1042,11 @@ export function WealthfolioConnectProvider({ children }: { children: ReactNode }
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [enabled]);
 
   if (!isCapabilityCheckComplete) return <StartupScreen />;
 
-  if (!CONNECT_ENABLED || !isCloudSyncAvailable) {
+  if (!enabled || !isCloudSyncAvailable) {
     return (
       <WealthfolioConnectContext.Provider value={disabledContextValue}>
         {children}

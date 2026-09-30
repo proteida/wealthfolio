@@ -47,6 +47,65 @@ pub struct Config {
     /// headers cross-site, so DNS rebinding gains nothing). Deployments
     /// that want strict Host pinning set WF_MCP_ALLOWED_HOSTS explicitly.
     pub mcp_allowed_hosts: Option<Vec<String>>,
+    /// Client-facing Connect endpoints served to the frontend via
+    /// `GET /api/v1/client-config` (`WF_CONNECT_*`, see [`connect_client_config`]).
+    /// Lets self-hosters repoint the connector/auth host without rebuilding.
+    pub connect_client: ConnectClientConfig,
+}
+
+/// Connect endpoints exposed to the browser client. Every field is optional:
+/// unset means "no runtime override" (the frontend falls back to its baked-in
+/// values, then to the cloud defaults). Only publishable material belongs
+/// here — never secrets.
+///
+/// Resolution per key: `WF_CONNECT_*` first, then the bare `CONNECT_*` twin
+/// (process env already beats the env file inside the loader, so a plain
+/// export still wins for one-off overrides).
+#[derive(Clone, Default)]
+pub struct ConnectClientConfig {
+    /// Connector/cloud data API base (`WF_CONNECT_API_URL`).
+    pub api_url: Option<String>,
+    /// Supabase-compatible auth URL (`WF_CONNECT_AUTH_URL`).
+    pub auth_url: Option<String>,
+    /// Auth publishable key — public by design (`WF_CONNECT_AUTH_PUBLISHABLE_KEY`).
+    pub auth_publishable_key: Option<String>,
+    /// Hosted OAuth bounce page (`WF_CONNECT_OAUTH_CALLBACK_URL`).
+    pub oauth_callback_url: Option<String>,
+}
+
+impl ConnectClientConfig {
+    /// True when at least one endpoint is overridden at runtime.
+    pub fn has_any(&self) -> bool {
+        self.api_url.is_some()
+            || self.auth_url.is_some()
+            || self.auth_publishable_key.is_some()
+            || self.oauth_callback_url.is_some()
+    }
+}
+
+fn non_empty_env(keys: [&str; 2]) -> Option<String> {
+    keys.into_iter()
+        .filter_map(|k| std::env::var(k).ok())
+        .map(|v| v.trim().to_string())
+        .find(|v| !v.is_empty())
+}
+
+/// Read [`ConnectClientConfig`] from the environment. Shared by
+/// [`Config::from_env`] and the public client-config endpoint so both report
+/// identical values.
+pub fn connect_client_config() -> ConnectClientConfig {
+    ConnectClientConfig {
+        api_url: non_empty_env(["WF_CONNECT_API_URL", "CONNECT_API_URL"]),
+        auth_url: non_empty_env(["WF_CONNECT_AUTH_URL", "CONNECT_AUTH_URL"]),
+        auth_publishable_key: non_empty_env([
+            "WF_CONNECT_AUTH_PUBLISHABLE_KEY",
+            "CONNECT_AUTH_PUBLISHABLE_KEY",
+        ]),
+        oauth_callback_url: non_empty_env([
+            "WF_CONNECT_OAUTH_CALLBACK_URL",
+            "CONNECT_OAUTH_CALLBACK_URL",
+        ]),
+    }
 }
 
 impl Config {
@@ -207,6 +266,7 @@ impl Config {
             mcp_enabled,
             mcp_audit_enabled,
             mcp_allowed_hosts,
+            connect_client: connect_client_config(),
         };
         let _ = crate::api::cors_layer(&config)?;
         Ok(config)
