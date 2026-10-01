@@ -10,14 +10,14 @@
  * Only publishable material flows through this channel — never secrets.
  */
 
+import { invoke } from "@/adapters";
+
 export interface RuntimeConnectConfig {
   apiUrl?: string;
   authUrl?: string;
   authPublishableKey?: string;
   oauthCallbackUrl?: string;
 }
-
-const CLIENT_CONFIG_PATH = "/api/v1/client-config";
 
 let slot: RuntimeConnectConfig | null = null;
 let inflight: Promise<RuntimeConnectConfig | null> | null = null;
@@ -37,12 +37,10 @@ function clean(value: unknown): string | undefined {
 export function loadConnectRuntimeConfig(): Promise<RuntimeConnectConfig | null> {
   if (settled) return Promise.resolve(slot);
   if (!inflight) {
-    inflight = fetch(CLIENT_CONFIG_PATH, { credentials: "same-origin" })
-      .then((res) => {
-        if (!res.ok) return null;
-        return res.json() as Promise<unknown>;
-      })
-      .then((body) => {
+    // Adapter-routed: Tauri IPC on desktop, GET /api/v1/client-config on web.
+    inflight = (async () => {
+      try {
+        const body = await invoke<unknown>("get_client_config");
         if (!isRecord(body) || !isRecord(body.connect)) return null;
         const c = body.connect;
         const cfg: RuntimeConnectConfig = {
@@ -54,13 +52,14 @@ export function loadConnectRuntimeConfig(): Promise<RuntimeConnectConfig | null>
         return cfg.apiUrl ?? cfg.authUrl ?? cfg.authPublishableKey ?? cfg.oauthCallbackUrl
           ? cfg
           : null;
-      })
-      .catch(() => null)
-      .then((cfg) => {
-        slot = cfg;
-        settled = true;
-        return cfg;
-      });
+      } catch {
+        return null;
+      }
+    })().then((cfg) => {
+      slot = cfg;
+      settled = true;
+      return cfg;
+    });
   }
   return inflight;
 }

@@ -1,3 +1,4 @@
+import { invoke } from "@/adapters";
 import {
   isRuntimeConnectConfigured,
   loadConnectRuntimeConfig,
@@ -8,6 +9,10 @@ import {
   resolveOAuthCallbackUrl,
 } from "@/lib/connect-runtime-config";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/adapters", () => ({ invoke: vi.fn() }));
+
+const invokeMock = vi.mocked(invoke);
 
 afterEach(() => {
   resetConnectRuntimeConfigForTests();
@@ -40,37 +45,26 @@ describe("connect runtime config", () => {
     expect(resolveConnectEnabled(true)).toBe(true);
   });
 
-  it("loads once from /api/v1/client-config and tolerates failure", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () =>
-        Promise.resolve({
-          connect: { authUrl: "https://r.example", authPublishableKey: "rk" },
-        }),
+  it("loads once via the adapter and tolerates failure", async () => {
+    invokeMock.mockResolvedValue({
+      connect: { authUrl: "https://r.example", authPublishableKey: "rk" },
     });
-    vi.stubGlobal("fetch", fetchMock);
 
     const first = await loadConnectRuntimeConfig();
     const second = await loadConnectRuntimeConfig();
     expect(first).toEqual({ authUrl: "https://r.example", authPublishableKey: "rk" });
     expect(second).toBe(first);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith("/api/v1/client-config", expect.anything());
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(invokeMock).toHaveBeenCalledWith("get_client_config");
     expect(resolveConnectEnabled(false)).toBe(true);
   });
 
-  it("resolves null when the endpoint is missing or malformed", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({ ok: false, json: () => Promise.resolve({}) }),
-    );
+  it("resolves null when the command is missing or malformed", async () => {
+    invokeMock.mockRejectedValue(new Error("unknown command"));
     expect(await loadConnectRuntimeConfig()).toBeNull();
 
     resetConnectRuntimeConfigForTests();
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({ nope: 1 }) }),
-    );
+    invokeMock.mockResolvedValue({ nope: 1 });
     expect(await loadConnectRuntimeConfig()).toBeNull();
   });
 });

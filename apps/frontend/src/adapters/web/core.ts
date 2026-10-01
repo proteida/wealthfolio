@@ -40,6 +40,7 @@ export const COMMANDS: CommandMap = {
   update_settings: { method: "PUT", path: "/settings" },
   is_auto_update_check_enabled: { method: "GET", path: "/settings/auto-update-enabled" },
   get_app_info: { method: "GET", path: "/app/info" },
+  get_client_config: { method: "GET", path: "/client-config" },
   check_update: { method: "GET", path: "/app/check-update" },
   get_database_encryption_status: {
     method: "GET",

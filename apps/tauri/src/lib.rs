@@ -451,6 +451,7 @@ pub fn run() {
             commands::utilities::export_data_file,
             commands::utilities::open_external_url,
             commands::utilities::get_app_info,
+            commands::utilities::get_client_config,
             commands::utilities::profile_transfer_file,
             commands::utilities::check_for_updates,
             commands::utilities::install_app_update,

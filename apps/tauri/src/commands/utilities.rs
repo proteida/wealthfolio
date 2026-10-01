@@ -483,6 +483,48 @@ pub async fn get_app_info(app_handle: AppHandle, state: ProfileAccess) -> Result
     })
 }
 
+/// Runtime client configuration for the Connect frontend (`WF_CONNECT_*`,
+/// each honoring its bare `CONNECT_*` twin). Public: the login screen needs
+/// it pre-auth. Mirrors `GET /api/v1/client-config` (apps/server) so desktop
+/// — where the webview cannot reach the server over HTTP — gets the same
+/// values through Tauri IPC. Only publishable material; never secrets.
+#[tauri::command]
+pub async fn get_client_config() -> Result<serde_json::Value, String> {
+    fn non_empty(keys: [&str; 2]) -> Option<String> {
+        keys.into_iter()
+            .filter_map(|k| std::env::var(k).ok())
+            .map(|v| v.trim().to_string())
+            .find(|v| !v.is_empty())
+    }
+    let mut connect = serde_json::Map::new();
+    if let Some(v) = non_empty(["WF_CONNECT_API_URL", "CONNECT_API_URL"]) {
+        connect.insert("apiUrl".into(), serde_json::Value::String(v));
+    }
+    if let Some(v) = non_empty(["WF_CONNECT_AUTH_URL", "CONNECT_AUTH_URL"]) {
+        connect.insert("authUrl".into(), serde_json::Value::String(v));
+    }
+    if let Some(v) = non_empty([
+        "WF_CONNECT_AUTH_PUBLISHABLE_KEY",
+        "CONNECT_AUTH_PUBLISHABLE_KEY",
+    ]) {
+        connect.insert("authPublishableKey".into(), serde_json::Value::String(v));
+    }
+    if let Some(v) = non_empty([
+        "WF_CONNECT_OAUTH_CALLBACK_URL",
+        "CONNECT_OAUTH_CALLBACK_URL",
+    ]) {
+        connect.insert("oauthCallbackUrl".into(), serde_json::Value::String(v));
+    }
+    let mut root = serde_json::Map::new();
+    if !connect.is_empty() {
+        root.insert(
+            "connect".into(),
+            serde_json::Value::Object(connect),
+        );
+    }
+    Ok(serde_json::Value::Object(root))
+}
+
 /// Check for updates and return update info if available.
 #[tauri::command]
 pub async fn check_for_updates(app_handle: AppHandle) -> Result<Option<serde_json::Value>, String> {
