@@ -200,6 +200,21 @@ export interface AppInfo {
 }
 
 /**
+ * Runtime client configuration (Connect endpoints). Served by the backend
+ * from `WF_CONNECT_*` (`GET /api/v1/client-config` on web,
+ * `get_client_config` Tauri command on desktop). All fields optional:
+ * absent means "no runtime override".
+ */
+export interface ClientConfigResponse {
+  connect?: {
+    apiUrl?: string;
+    authUrl?: string;
+    authPublishableKey?: string;
+    oauthCallbackUrl?: string;
+  };
+}
+
+/**
  * Result from checking for application updates.
  */
 export interface UpdateCheckResult {

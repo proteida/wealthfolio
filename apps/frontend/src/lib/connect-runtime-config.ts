@@ -10,7 +10,7 @@
  * Only publishable material flows through this channel — never secrets.
  */
 
-import { invoke } from "@/adapters";
+import { getClientConfig } from "@/adapters";
 
 export interface RuntimeConnectConfig {
   apiUrl?: string;
@@ -40,7 +40,7 @@ export function loadConnectRuntimeConfig(): Promise<RuntimeConnectConfig | null>
     // Adapter-routed: Tauri IPC on desktop, GET /api/v1/client-config on web.
     inflight = (async () => {
       try {
-        const body = await invoke<unknown>("get_client_config");
+        const body = await getClientConfig();
         if (!isRecord(body) || !isRecord(body.connect)) return null;
         const c = body.connect;
         const cfg: RuntimeConnectConfig = {

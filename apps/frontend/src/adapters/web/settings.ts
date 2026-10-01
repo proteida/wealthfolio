@@ -5,7 +5,7 @@ import { profileFetch } from "@/features/profiles/session";
 import { API_PREFIX, invoke, logger } from "./core";
 import { notifyUnauthorized } from "@/lib/auth-token";
 import type { Settings, UpdateInfo } from "@/lib/types";
-import type { AppInfo, PlatformInfo, BackupImportPreview } from "../types";
+import type { AppInfo, ClientConfigResponse, PlatformInfo, BackupImportPreview } from "../types";
 export type { BackupImportPreview } from "../types";
 
 // ============================================================================
@@ -153,6 +153,15 @@ export const getAppInfo = async (): Promise<AppInfo> => {
       dbPath: "",
       logsDir: "",
     };
+  }
+};
+
+export const getClientConfig = async (): Promise<ClientConfigResponse | null> => {
+  try {
+    return await invoke<ClientConfigResponse>("get_client_config");
+  } catch {
+    logger.error("Error fetching client config");
+    return null;
   }
 };
 

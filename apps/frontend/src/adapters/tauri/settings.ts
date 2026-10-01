@@ -1,6 +1,6 @@
 // Settings Commands
 import type { Settings, UpdateInfo } from "@/lib/types";
-import type { AppInfo, PlatformInfo, BackupImportPreview } from "../types";
+import type { AppInfo, ClientConfigResponse, PlatformInfo, BackupImportPreview } from "../types";
 export type { BackupImportPreview } from "../types";
 
 import { invoke, tauriInvoke, logger } from "./core";
@@ -132,6 +132,10 @@ export const getAppInfo = async (): Promise<AppInfo> => {
     logger.error("Error fetching app info");
     throw err;
   }
+};
+
+export const getClientConfig = async (): Promise<ClientConfigResponse> => {
+  return await invoke<ClientConfigResponse>("get_client_config");
 };
 
 // ============================================================================

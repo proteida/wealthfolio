@@ -1,4 +1,4 @@
-import { invoke } from "@/adapters";
+import { getClientConfig } from "@/adapters";
 import {
   isRuntimeConnectConfigured,
   loadConnectRuntimeConfig,
@@ -10,9 +10,9 @@ import {
 } from "@/lib/connect-runtime-config";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/adapters", () => ({ invoke: vi.fn() }));
+vi.mock("@/adapters", () => ({ getClientConfig: vi.fn() }));
 
-const invokeMock = vi.mocked(invoke);
+const clientConfigMock = vi.mocked(getClientConfig);
 
 afterEach(() => {
   resetConnectRuntimeConfigForTests();
@@ -46,7 +46,7 @@ describe("connect runtime config", () => {
   });
 
   it("loads once via the adapter and tolerates failure", async () => {
-    invokeMock.mockResolvedValue({
+    clientConfigMock.mockResolvedValue({
       connect: { authUrl: "https://r.example", authPublishableKey: "rk" },
     });
 
@@ -54,17 +54,16 @@ describe("connect runtime config", () => {
     const second = await loadConnectRuntimeConfig();
     expect(first).toEqual({ authUrl: "https://r.example", authPublishableKey: "rk" });
     expect(second).toBe(first);
-    expect(invokeMock).toHaveBeenCalledTimes(1);
-    expect(invokeMock).toHaveBeenCalledWith("get_client_config");
+    expect(clientConfigMock).toHaveBeenCalledTimes(1);
     expect(resolveConnectEnabled(false)).toBe(true);
   });
 
   it("resolves null when the command is missing or malformed", async () => {
-    invokeMock.mockRejectedValue(new Error("unknown command"));
+    clientConfigMock.mockRejectedValue(new Error("unknown command"));
     expect(await loadConnectRuntimeConfig()).toBeNull();
 
     resetConnectRuntimeConfigForTests();
-    invokeMock.mockResolvedValue({ nope: 1 });
+    clientConfigMock.mockResolvedValue({ nope: 1 } as never);
     expect(await loadConnectRuntimeConfig()).toBeNull();
   });
 });
