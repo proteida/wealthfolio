@@ -86,6 +86,10 @@ jobs:
         # If you don't have `beforeBuildCommand` configured you may want to build your frontend here too.
         run: pnpm install # Change this to npm, yarn or pnpm.
 
+      - name: Install Tauri CLI with upstream RPM prerelease fix
+        if: contains(matrix.platform, 'ubuntu')
+        run: bash .github/scripts/install-tauri-rpm-cli.sh
+
       - name: Install Rust targets
         if: matrix.platform == 'windows-latest'
         run: rustup target add aarch64-pc-windows-msvc x86_64-pc-windows-msvc
@@ -198,6 +202,7 @@ jobs:
           AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
         with:
+          tauriScript: ${{ contains(matrix.platform, 'ubuntu') && 'cargo tauri' || '' }}
           tagName: ${{ github.event_name == 'push' && github.ref_name || '' }}
           releaseName: ${{ github.event_name == 'push' && 'Wealthfolio v__VERSION__' || '' }}
           releaseBody: "See the assets to download and install this version."
