@@ -11,6 +11,7 @@
  */
 
 import { getClientConfig } from "@/adapters";
+import connectDefaults from "../../../../config/connect.defaults.json";
 
 export interface RuntimeConnectConfig {
   apiUrl?: string;
@@ -49,7 +50,7 @@ export function loadConnectRuntimeConfig(): Promise<RuntimeConnectConfig | null>
           authPublishableKey: clean(c.authPublishableKey),
           oauthCallbackUrl: clean(c.oauthCallbackUrl),
         };
-        return cfg.apiUrl ?? cfg.authUrl ?? cfg.authPublishableKey ?? cfg.oauthCallbackUrl
+        return (cfg.apiUrl ?? cfg.authUrl ?? cfg.authPublishableKey ?? cfg.oauthCallbackUrl)
           ? cfg
           : null;
       } catch {
@@ -77,9 +78,7 @@ export function resetConnectRuntimeConfigForTests(): void {
 }
 
 /** Runtime pair counts as configured when it carries auth URL + key. */
-export function isRuntimeConnectConfigured(
-  cfg: RuntimeConnectConfig | null = slot,
-): boolean {
+export function isRuntimeConnectConfigured(cfg: RuntimeConnectConfig | null = slot): boolean {
   return Boolean(cfg?.authUrl && cfg?.authPublishableKey);
 }
 
@@ -121,9 +120,5 @@ export function resolveOAuthCallbackUrl(
   cfg: RuntimeConnectConfig | null = slot,
   baked?: BakedConnectValues,
 ): string {
-  return pick(
-    cfg?.oauthCallbackUrl,
-    baked?.oauthCallbackUrl,
-    "https://connect.wealthfolio.app/deeplink",
-  );
+  return pick(cfg?.oauthCallbackUrl, baked?.oauthCallbackUrl, connectDefaults.oauthCallbackUrl);
 }

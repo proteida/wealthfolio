@@ -22,9 +22,9 @@ afterEach(() => {
 describe("connect runtime config", () => {
   it("falls back to baked values, then cloud defaults", () => {
     expect(resolveAuthUrl(null, {})).toBe("https://auth.wealthfolio.app");
-    expect(
-      resolveAuthUrl(null, { authUrl: "https://baked.example" }),
-    ).toBe("https://baked.example");
+    expect(resolveAuthUrl(null, { authUrl: "https://baked.example" })).toBe(
+      "https://baked.example",
+    );
     expect(
       resolveAuthUrl({ authUrl: "https://runtime.example" }, { authUrl: "https://baked.example" }),
     ).toBe("https://runtime.example");

@@ -37,17 +37,19 @@ pub fn extra_csp_connect_sources() -> Vec<String> {
 
 /// Reduce a URL to its CSP origin (`scheme://host[:port]`). Returns `None`
 /// for unparseable values, which fail closed (no extra allowance).
-fn csp_source(url: &str) -> Option<String> {
-    let url = url.trim();
-    let (scheme, rest) = url.split_once("://")?;
-    if scheme != "http" && scheme != "https" {
+fn csp_source(value: &str) -> Option<String> {
+    let url = reqwest::Url::parse(value.trim()).ok()?;
+    let host = url.host_str()?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || !host
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b".-:[]".contains(&byte))
+    {
         return None;
     }
-    let host = rest.split('/').next()?.split('@').next_back()?;
-    if host.is_empty() {
-        return None;
-    }
-    Some(format!("{scheme}://{host}"))
+    Some(url.origin().ascii_serialization())
 }
 
 #[derive(Serialize)]
@@ -104,5 +106,12 @@ mod tests {
         assert_eq!(csp_source("not a url"), None);
         assert_eq!(csp_source("ftp://x.example"), None);
         assert_eq!(csp_source("https://"), None);
+        for invalid in [
+            "https://example.com; script-src *",
+            "https://*.example.com",
+            "https://user:password@example.com",
+        ] {
+            assert_eq!(csp_source(invalid), None);
+        }
     }
 }

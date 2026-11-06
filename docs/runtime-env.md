@@ -47,8 +47,8 @@ repeated key wins.
 | Priority | Source                                                                   |
 | -------- | ------------------------------------------------------------------------ |
 | 1        | Process environment (launchd, shell, Docker `-e`, …) — even when empty   |
-| 2        | CWD `.env` (existing `dotenvy` behavior, Docker/dev)                     |
-| 3        | `wealthfolio.env` (this file)                                            |
+| 2        | `wealthfolio.env` (this file)                                            |
+| 3        | CWD `.env` (fills values still unset, Docker/dev)                        |
 | 4        | Compile-time baked values (`option_env!("CONNECT_*")` in desktop builds) |
 | 5        | Built-in defaults                                                        |
 
@@ -59,22 +59,22 @@ without a rebuild.
 
 ## Runtime Connect endpoints (no rebuild)
 
-The browser client fetches `GET /api/v1/client-config` at boot. Set any of
-these in `wealthfolio.env` (each also honors its bare `CONNECT_*` twin, with
+The browser client fetches `GET /api/v1/client-config` at boot. Set any of these
+in `wealthfolio.env` (each also honors its bare `CONNECT_*` twin, with
 `WF_CONNECT_*` winning when both are set):
 
-| Variable | Effect |
-| -------- | ------ |
-| `WF_CONNECT_AUTH_URL` | Supabase-compatible auth host for login |
+| Variable                          | Effect                                  |
+| --------------------------------- | --------------------------------------- |
+| `WF_CONNECT_AUTH_URL`             | Supabase-compatible auth host for login |
 | `WF_CONNECT_AUTH_PUBLISHABLE_KEY` | Auth publishable key (public by design) |
-| `WF_CONNECT_API_URL` | Connector/cloud data API base |
-| `WF_CONNECT_OAUTH_CALLBACK_URL` | Hosted OAuth bounce page |
+| `WF_CONNECT_API_URL`              | Connector/cloud data API base           |
+| `WF_CONNECT_OAUTH_CALLBACK_URL`   | Hosted OAuth bounce page                |
 
-Setting auth URL + key switches Connect on even in a build that baked nothing
-in (the "Not Configured" screen disappears after the fetch). Anything unset
-falls back to the baked-in build value, then to the cloud defaults. The
-endpoint is public (the login screen needs it pre-auth) and serves no secrets.
-Custom hosts are automatically added to the CSP `connect-src` allowlist.
+Setting auth URL + key switches Connect on even in a build that baked nothing in
+(the "Not Configured" screen disappears after the fetch). Anything unset falls
+back to the baked-in build value, then to the cloud defaults. The endpoint is
+public (the login screen needs it pre-auth) and serves no secrets. Custom hosts
+are automatically added to the CSP `connect-src` allowlist.
 
 ## Restart requirement
 
@@ -91,3 +91,21 @@ the app** (desktop) or restart the server process — there is no file watching.
   like `runtime-env: 'WF_LISTEN_ADDR' resolved from file`.
 
 Server key reference (ports, secrets, auth, OIDC): `docs/self-host/README.md`.
+
+## Updating the self-hosted fork
+
+`main` tracks upstream; `main-self-hosted-connector` adds this runtime
+configuration layer. Fork releases keep the upstream version with a
+`-selfhosted.N` suffix (for example, `3.12.0-selfhosted.1`). The application
+identifier and user-owned configuration location stay unchanged, so updating
+does not replace your env file.
+
+Back up your profiles before upgrading from 3.9.1. The upstream 3.10 portfolio
+engine transition backs up and recalculates history on first launch; derived
+balances, cost basis and returns can change. Update all synced devices before
+using the new cost basis methods, fund conversions or shared goal funding.
+
+Without signing credentials, fork desktop packages are unsigned and do not
+provide in-app automatic updates. Download subsequent packages from this fork's
+GitHub releases. Fork container images are published to
+`ghcr.io/proteida/wealthfolio`, not the upstream Docker Hub repositories.

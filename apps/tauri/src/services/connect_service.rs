@@ -6,8 +6,8 @@
 use std::sync::Arc;
 
 use wealthfolio_connect::{
-    ensure_valid_access_token, ConnectApiClient, TokenLifecycleConfig, TokenLifecycleState,
-    DEFAULT_CLOUD_API_URL,
+    default_cloud_api_url, ensure_profile_access_token, ensure_valid_access_token,
+    ConnectApiClient, TokenLifecycleConfig, TokenLifecycleState,
 };
 use wealthfolio_core::{secrets::SecretStore, settings::SettingsServiceTrait};
 
@@ -30,9 +30,10 @@ pub fn is_cloud_sync_enabled() -> bool {
 /// startup) wins; the compile-time baked value is the fallback so existing
 /// builds keep working unchanged.
 fn runtime_or_baked(key: &str, baked: Option<&str>) -> Option<String> {
-    std::env::var(key)
-        .ok()
-        .filter(|value| !value.trim().is_empty())
+    [format!("WF_{key}"), key.to_string()]
+        .into_iter()
+        .filter_map(|key| std::env::var(key).ok())
+        .find(|value| !value.trim().is_empty())
         .or_else(|| baked.map(str::to_string))
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -47,7 +48,7 @@ pub fn cloud_api_base_url() -> Option<String> {
     runtime_or_baked("CONNECT_API_URL", option_env!("CONNECT_API_URL"))
         .map(|url| url.trim_end_matches('/').to_string())
         .filter(|url| !url.is_empty())
-        .or_else(|| Some(DEFAULT_CLOUD_API_URL.to_string()))
+        .or_else(|| Some(default_cloud_api_url().to_string()))
 }
 
 fn connect_auth_url() -> Option<String> {
@@ -102,26 +103,6 @@ impl ConnectService {
     ) {
         *self.binding.write().expect("binding initialization") = Some((registry, id));
     }
-    async fn verify_binding(&self, token: &str) -> Result<(), String> {
-        let binding_owner = self
-            .binding
-            .read()
-            .map_err(|_| "Profile binding unavailable")?
-            .clone();
-        if let Some((registry, id)) = binding_owner {
-            let config = token_lifecycle_config().ok_or("Connect auth is unavailable")?;
-            wealthfolio_connect::token_lifecycle::admit_profile_binding(
-                token,
-                &config,
-                &cloud_api_base_url().ok_or("Connect unavailable")?,
-                registry.as_ref(),
-                id,
-            )
-            .await?;
-        }
-        Ok(())
-    }
-
     /// Returns a valid access token, refreshing it through Supabase when needed.
     pub async fn get_valid_access_token(&self) -> Result<String, String> {
         if !is_cloud_sync_enabled() {
@@ -136,15 +117,33 @@ impl ConnectService {
             return Err("Reconnect Wealthfolio Connect after restoring this backup.".into());
         }
         let config = token_lifecycle_config();
-        let token = ensure_valid_access_token(
-            self.secret_store.as_ref(),
-            self.token_lifecycle.as_ref(),
-            config.as_ref(),
-        )
-        .await
-        .map_err(|err| err.to_string())?;
-        self.verify_binding(&token).await?;
-        Ok(token)
+        let binding = self
+            .binding
+            .read()
+            .map_err(|_| "Profile binding unavailable")?
+            .clone();
+        let token = match binding {
+            Some((registry, id)) => {
+                ensure_profile_access_token(
+                    self.secret_store.as_ref(),
+                    self.token_lifecycle.as_ref(),
+                    config.as_ref(),
+                    &cloud_api_base_url().ok_or("Connect unavailable")?,
+                    registry.as_ref(),
+                    id,
+                )
+                .await
+            }
+            None => {
+                ensure_valid_access_token(
+                    self.secret_store.as_ref(),
+                    self.token_lifecycle.as_ref(),
+                    config.as_ref(),
+                )
+                .await
+            }
+        };
+        token.map_err(|err| err.to_string())
     }
 
     pub fn is_session_configured(&self) -> Result<bool, String> {
@@ -224,31 +223,5 @@ impl ConnectService {
         let access_token = self.get_valid_access_token().await?;
 
         ConnectApiClient::new(&cloud_api_base_url, &access_token).map_err(|e| e.to_string())
-    }
-
-    pub async fn has_device_sync(&self) -> Result<bool, String> {
-        let token = self.get_valid_access_token().await?;
-        let url = cloud_api_base_url().ok_or("Cloud sync is disabled")?;
-        ConnectApiClient::new(&url, &token)
-            .map_err(|err| err.to_string())?
-            .has_device_sync()
-            .await
-            .map_err(|err| err.to_string())
-    }
-
-    pub async fn ensure_device_sync_subscription(&self) -> Result<(), String> {
-        if !self.has_device_sync().await? {
-            return Err("Device sync is paused: an active subscription is required.".to_string());
-        }
-        Ok(())
-    }
-
-    /// Check if the current user's plan includes broker sync.
-    ///
-    /// Returns `Ok(true)` only when the user has an active subscription
-    /// on a plan that includes broker sync (i.e. not "basic").
-    pub async fn has_broker_sync(&self) -> Result<bool, String> {
-        let client = self.get_api_client().await?;
-        client.has_broker_sync().await.map_err(|e| e.to_string())
     }
 }

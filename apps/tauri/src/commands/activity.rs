@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use log::debug;
 use wealthfolio_core::activities::{
     Activity, ActivityBulkMutationRequest, ActivityBulkMutationResult, ActivityImport,
-    ActivitySearchResponse, ActivityUpdate, ImportActivitiesResult, ImportAssetCandidate,
-    ImportAssetPreviewItem, ImportMappingData, ImportTemplateData, InternalTransferPairRequest,
-    InternalTransferPairResponse, NewActivity, ParseConfig, ParsedCsvResult, Sort,
-    TransferMatchCandidate, TransferMatchCandidateRequest,
+    ActivitySearchResponse, ActivitySplitEffect, ActivityUpdate, ConvertToTransferRequest,
+    ImportActivitiesResult, ImportAssetCandidate, ImportAssetPreviewItem, ImportMappingData,
+    ImportTemplateData, InternalTransferPairRequest, InternalTransferPairResponse, NewActivity,
+    ParseConfig, ParsedCsvResult, Sort, TransferMatchCandidate, TransferMatchCandidateRequest,
 };
 use wealthfolio_core::health::HealthServiceTrait;
 use wealthfolio_core::utils::time_utils::{
@@ -28,6 +28,7 @@ pub async fn search_activities(
     date_to: Option<String>,           // Optional end date filter (YYYY-MM-DD, inclusive)
     instrument_type_filter: Option<Vec<String>>, // Optional instrument_type filter
     activity_id_filter: Option<Vec<String>>, // Optional exact activity-id filter
+    include_cash_balances: Option<bool>, // Cash balance after each row, for one cash account
     state: ProfileAccess,
 ) -> Result<ActivitySearchResponse, String> {
     let context = state.context()?;
@@ -48,7 +49,8 @@ pub async fn search_activities(
         local_date_range_utc_bounds(date_from_parsed, date_to_parsed, tz)
             .map_err(|e| e.to_string())?;
 
-    Ok(context.activity_service().search_activities_in_utc_range(
+    let activity_service = context.activity_service();
+    let mut response = activity_service.search_activities_in_utc_range(
         page,
         page_size,
         account_id_filter,
@@ -60,7 +62,11 @@ pub async fn search_activities(
         date_to_utc_exclusive,
         instrument_type_filter,
         activity_id_filter,
-    )?)
+    )?;
+    if include_cash_balances.unwrap_or(false) {
+        activity_service.attach_cash_balances(&mut response).await?;
+    }
+    Ok(response)
 }
 
 #[tauri::command]
@@ -78,6 +84,31 @@ pub async fn create_activity(
         .map_err(|e| e.to_string())?;
     context.health_service().clear_cache().await;
     Ok(created)
+}
+
+#[tauri::command]
+pub async fn review_activity_split_effects(
+    activities: Vec<ActivityUpdate>,
+    state: ProfileAccess,
+) -> Result<Vec<Vec<ActivitySplitEffect>>, String> {
+    state
+        .context()?
+        .activity_service()
+        .review_activity_split_effects_batch(activities)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn review_internal_transfer_pair_split_effects(
+    request: InternalTransferPairRequest,
+    state: ProfileAccess,
+) -> Result<Vec<ActivitySplitEffect>, String> {
+    state
+        .context()?
+        .activity_service()
+        .review_internal_transfer_pair_split_effects(request)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -150,6 +181,35 @@ pub async fn save_internal_transfer_pair(
     let pair = context
         .activity_service()
         .save_internal_transfer_pair(request)
+        .await
+        .map_err(|e| e.to_string())?;
+    context.health_service().clear_cache().await;
+    Ok(pair)
+}
+
+#[tauri::command]
+pub async fn review_convert_to_transfer_split_effects(
+    request: ConvertToTransferRequest,
+    state: ProfileAccess,
+) -> Result<Vec<ActivitySplitEffect>, String> {
+    state
+        .context()?
+        .activity_service()
+        .review_convert_to_transfer_split_effects(request)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn convert_to_internal_transfer(
+    request: ConvertToTransferRequest,
+    state: ProfileAccess,
+) -> Result<InternalTransferPairResponse, String> {
+    let context = state.context()?;
+    debug!("Converting activity into an internal transfer...");
+    let pair = context
+        .activity_service()
+        .convert_to_internal_transfer(request)
         .await
         .map_err(|e| e.to_string())?;
     context.health_service().clear_cache().await;

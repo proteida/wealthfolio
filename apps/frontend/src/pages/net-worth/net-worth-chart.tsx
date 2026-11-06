@@ -111,9 +111,9 @@ const CustomTooltip = ({ active, payload, isBalanceHidden, t }: CustomTooltipPro
 function transformData(data: NetWorthHistoryPoint[]): ChartDataPoint[] {
   return data.map((point) => ({
     date: point.date,
-    netWorth: parseFloat(point.netWorth) || 0,
-    totalAssets: parseFloat(point.totalAssets) || 0,
-    totalLiabilities: parseFloat(point.totalLiabilities) || 0,
+    netWorth: point.netWorth,
+    totalAssets: point.totalAssets,
+    totalLiabilities: point.totalLiabilities,
     currency: point.currency,
   }));
 }
@@ -226,7 +226,6 @@ export function NetWorthChart({ data, isLoading }: NetWorthChartProps) {
 
         {/* Net Worth (main filled area) */}
         <Area
-          isAnimationActive={true}
           animationDuration={300}
           animationEasing="ease-out"
           connectNulls={true}
@@ -247,7 +246,7 @@ export function NetWorthChart({ data, isLoading }: NetWorthChartProps) {
               value: formatAmount(0, chartData[0].currency),
               position: "insideTopLeft",
               fill: "var(--muted-foreground)",
-              fontSize: 11,
+              fontSize: "0.6875rem",
             }}
           />
         )}

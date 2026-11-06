@@ -112,8 +112,8 @@ impl Config {
     pub fn from_env() -> anyhow::Result<Self> {
         // External runtime env file first (e.g.
         // ~/Library/Application Support/com.teymz.wealthfolio/wealthfolio.env
-        // on macOS): it seeds defaults that the process environment and the
-        // CWD `.env` below still override. Missing file is fine; a malformed
+        // on macOS): the process environment wins, and CWD `.env` below fills
+        // only values still unset. Missing file is fine; a malformed
         // line aborts startup naming file:line.
         wealthfolio_core::runtime_env::load()?;
         dotenvy::dotenv().ok();
@@ -305,11 +305,11 @@ fn resolve_database_path(
         );
         return Ok(database);
     }
+    // Lossless: root_text and "app.db" are both UTF-8.
     Ok(std::path::Path::new(root_text)
         .join("app.db")
-        .to_str()
-        .unwrap()
-        .to_owned())
+        .to_string_lossy()
+        .into_owned())
 }
 
 /// Resolve existing aliases and new child directories without creating them.
@@ -361,6 +361,58 @@ mod tests {
     use super::*;
 
     const KEY: &str = "--------------------------------";
+
+    #[test]
+    fn runtime_connect_overrides_are_shared_by_client_and_server() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "config::tests::runtime_connect_worker",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env_clear()
+            .env("CONNECT_API_URL", "https://baked.example")
+            .env("WF_CONNECT_API_URL", "https://custom.example/")
+            .env("CONNECT_AUTH_URL", "https://fallback-auth.example")
+            .env("WF_CONNECT_AUTH_URL", "https://custom-auth.example")
+            .env("WF_CONNECT_AUTH_PUBLISHABLE_KEY", "publishable-test-key")
+            .env(
+                "WF_CONNECT_OAUTH_CALLBACK_URL",
+                "https://custom.example/deeplink",
+            )
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    #[ignore = "subprocess worker with isolated environment"]
+    fn runtime_connect_worker() {
+        let config = connect_client_config();
+        assert_eq!(config.api_url.as_deref(), Some("https://custom.example/"));
+        assert_eq!(
+            config.auth_url.as_deref(),
+            Some("https://custom-auth.example")
+        );
+        assert_eq!(
+            config.auth_publishable_key.as_deref(),
+            Some("publishable-test-key")
+        );
+        assert_eq!(
+            config.oauth_callback_url.as_deref(),
+            Some("https://custom.example/deeplink")
+        );
+        #[cfg(any(feature = "connect-sync", feature = "device-sync"))]
+        assert_eq!(
+            crate::features::cloud_api_base_url().as_deref(),
+            Some("https://custom.example")
+        );
+    }
 
     #[test]
     fn data_directory_preserves_legacy_configuration_and_resolves_new_roots() {

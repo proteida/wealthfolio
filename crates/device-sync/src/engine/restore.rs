@@ -90,6 +90,8 @@ pub struct RestoreSnapshotRef {
     pub snapshot_id: String,
     pub oplog_seq: i64,
     pub created_at: String,
+    #[serde(default)]
+    pub is_empty: Option<bool>,
 }
 
 /// Authoritative state of the profile's restore operation.
@@ -152,6 +154,7 @@ pub trait RestorePorts: CredentialStore + SyncTransport + Send + Sync + 'static 
     async fn clear_freshness_gate(&self, device_id: &str);
     /// Rows in the synced tables that a replacement would overwrite.
     fn local_rows(&self) -> Result<i64, String>;
+    async fn snapshot_is_empty(&self, image: Vec<u8>) -> Result<bool, String>;
     /// Record that no snapshot is required for this device.
     async fn mark_restore_not_needed(
         &self,
@@ -201,6 +204,7 @@ struct RestoreEntry {
 /// A downloaded and validated snapshot, still encrypted. It stays in memory
 /// while the user decides; a readable copy exists only during replacement.
 struct PreparedSnapshot {
+    is_empty: Option<bool>,
     ciphertext: Vec<u8>,
     tables: Vec<String>,
     oplog_seq: i64,
@@ -575,6 +579,9 @@ impl DeviceSyncRuntimeState {
 
         let prepared = download_snapshot(ports, &session, &selected).await?;
         self.with_entry(operation_id, |entry| {
+            if let Some(snapshot) = &mut entry.operation.snapshot {
+                snapshot.is_empty = prepared.is_empty;
+            }
             entry.prepared = Some(Arc::new(prepared));
         })
         .ok_or(StepError::Stale)?;
@@ -598,6 +605,7 @@ impl DeviceSyncRuntimeState {
                         snapshot_id: snapshot.snapshot_id.clone(),
                         oplog_seq: snapshot.oplog_seq,
                         created_at: snapshot.created_at.clone(),
+                        is_empty: None,
                     };
                     info!(
                         "[DeviceSync] Restore {} selected snapshot {} (oplog_seq={})",
@@ -924,23 +932,19 @@ impl DeviceSyncRuntimeState {
 
 async fn open_session<P: RestorePorts>(ports: &P) -> Result<Session, Failure> {
     let not_ready = |message: String| {
+        if message.contains("SUBSCRIPTION_") || message.contains("PLAN_UPGRADE_REQUIRED") {
+            return failure(
+                RestoreErrorCode::SubscriptionRequired,
+                RestoreRetry::Transfer,
+                message,
+            );
+        }
         failure(
             RestoreErrorCode::DeviceNotReady,
             RestoreRetry::Transfer,
             message,
         )
     };
-    match ports.is_sync_allowed().await {
-        Ok(true) => {}
-        Ok(false) => {
-            return Err(failure(
-                RestoreErrorCode::SubscriptionRequired,
-                RestoreRetry::Transfer,
-                "Device sync requires an active subscription.",
-            ))
-        }
-        Err(error) => return Err(not_ready(error)),
-    }
     let identity = ports
         .get_sync_identity()
         .ok_or_else(|| not_ready("No sync identity configured.".to_string()))?;
@@ -969,6 +973,13 @@ async fn open_session<P: RestorePorts>(ports: &P) -> Result<Session, Failure> {
 }
 
 fn transfer_failed(error: TransportError) -> Failure {
+    if error.is_subscription_blocked() {
+        return failure(
+            RestoreErrorCode::SubscriptionRequired,
+            RestoreRetry::Transfer,
+            error.message,
+        );
+    }
     failure(
         RestoreErrorCode::TransferFailed,
         RestoreRetry::Transfer,
@@ -992,11 +1003,16 @@ async fn find_snapshot<P: RestorePorts>(
         },
         None => None,
     };
-    let action = ports
+    let action = match ports
         .get_reconcile_ready_state(&session.token, device_id)
         .await
-        .ok()
-        .map(|reconcile| reconcile.action);
+    {
+        Ok(reconcile) => Some(reconcile.action),
+        Err(error) if error.is_subscription_blocked() => {
+            return Err(transfer_failed(error));
+        }
+        Err(_) => None,
+    };
     let reconcile_requires_snapshot = matches!(
         action.as_deref(),
         Some("WAIT_SNAPSHOT") | Some("BOOTSTRAP_SNAPSHOT")
@@ -1116,28 +1132,30 @@ async fn download_snapshot<P: RestorePorts>(
         return Err(schema_newer(headers.schema_version));
     }
 
-    // Validate before asking for consent; the readable image is discarded.
-    decode_snapshot_image(&blob, &session.identity).map_err(|message| {
+    // Inspect a validated private image before asking for replacement consent.
+    let image = decode_snapshot_image(&blob, &session.identity).map_err(|message| {
         failure(
             RestoreErrorCode::SnapshotInvalid,
             RestoreRetry::NewAttempt,
             message,
         )
     })?;
+    let is_empty = match ports.snapshot_is_empty(image).await {
+        Ok(value) => Some(value),
+        Err(_) => {
+            warn!("[DeviceSync] Optional snapshot emptiness inspection unavailable");
+            None
+        }
+    };
 
-    let mut tables: Vec<String> = selected
-        .covers_tables
+    // Plaintext cloud metadata cannot narrow the authenticated snapshot's restore.
+    // Storage checks each locally known table in the decrypted image and skips absent tables.
+    let tables = APP_SYNC_TABLES
         .iter()
-        .filter(|table| APP_SYNC_TABLES.contains(&table.as_str()))
-        .cloned()
+        .map(|table| table.to_string())
         .collect();
-    if tables.is_empty() {
-        tables = APP_SYNC_TABLES
-            .iter()
-            .map(|table| table.to_string())
-            .collect();
-    }
     Ok(PreparedSnapshot {
+        is_empty,
         ciphertext: blob,
         tables,
         oplog_seq: selected.oplog_seq,

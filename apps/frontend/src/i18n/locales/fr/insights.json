@@ -39,10 +39,10 @@
     "rails": {
       "target_allocation": "Répartition cible",
       "details": "Détails",
-      "suggested_moves": "Mouvements suggérés",
-      "all_in_range": "Toutes les catégories sont dans la plage cible — aucun rééquilibrage nécessaire",
-      "add": "Ajouter",
-      "trim": "Réduire",
+      "target_differences": "Écarts à la cible",
+      "all_in_range": "Toutes les catégories sont dans leur plage cible.",
+      "below_target_by": "{{amount}} sous la cible",
+      "above_target_by": "{{amount}} au-dessus de la cible",
       "inside_target_range": "Dans la plage cible",
       "outside_range": "{{count}} hors de la plage · plus grand écart {{gap}}",
       "tolerance": "tolérance {{tolerance}}",
@@ -82,7 +82,6 @@
       "link_explanation": "Associer un bien existant ne modifie pas votre patrimoine net."
     },
     "failed_to_load": "Échec du chargement de la valeur nette",
-    "stale_valuations_tooltip": "Valorisations obsolètes (90+ jours) :",
     "days_ago": "il y a {{count}}j",
     "no_history_data": "Aucune donnée d'historique disponible",
     "breakdown": "Répartition",

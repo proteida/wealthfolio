@@ -40,6 +40,7 @@ struct FakePorts {
     root_key: String,
     device_id: StdMutex<String>,
     reconcile_action: StdMutex<String>,
+    reconcile_error: StdMutex<Option<TransportError>>,
     last_cycle_status: StdMutex<Option<String>>,
     sync_state: StdMutex<SyncState>,
     snapshots: StdMutex<Vec<FakeSnapshot>>,
@@ -50,12 +51,15 @@ struct FakePorts {
     download_failures: AtomicUsize,
     snapshot_missing: AtomicBool,
     local_rows: AtomicI64,
+    remote_empty: AtomicBool,
+    empty_check_fails: AtomicBool,
     needs_bootstrap: AtomicBool,
     backup_fails: AtomicBool,
     replace_fails: AtomicBool,
     downloads: StdMutex<Vec<String>>,
     backups: AtomicUsize,
     replacements: StdMutex<Vec<(String, i64)>>,
+    restored_tables: StdMutex<Vec<String>>,
     portfolio_refreshes: AtomicUsize,
     resumed: AtomicUsize,
     resumed_after_restore: AtomicUsize,
@@ -74,6 +78,7 @@ impl FakePorts {
             root_key,
             device_id: StdMutex::new(DEVICE_ID.to_string()),
             reconcile_action: StdMutex::new("BOOTSTRAP_SNAPSHOT".to_string()),
+            reconcile_error: StdMutex::new(None),
             last_cycle_status: StdMutex::new(None),
             sync_state: StdMutex::new(SyncState::Ready),
             snapshots: StdMutex::new(vec![snapshot]),
@@ -84,12 +89,15 @@ impl FakePorts {
             download_failures: AtomicUsize::new(0),
             snapshot_missing: AtomicBool::new(false),
             local_rows: AtomicI64::new(local_rows),
+            remote_empty: AtomicBool::new(false),
+            empty_check_fails: AtomicBool::new(false),
             needs_bootstrap: AtomicBool::new(true),
             backup_fails: AtomicBool::new(false),
             replace_fails: AtomicBool::new(false),
             downloads: StdMutex::new(Vec::new()),
             backups: AtomicUsize::new(0),
             replacements: StdMutex::new(Vec::new()),
+            restored_tables: StdMutex::new(Vec::new()),
             portfolio_refreshes: AtomicUsize::new(0),
             resumed: AtomicUsize::new(0),
             resumed_after_restore: AtomicUsize::new(0),
@@ -190,6 +198,9 @@ impl SyncTransport for FakePorts {
         _token: &str,
         _device_id: &str,
     ) -> Result<ReconcileReadyStateResponse, TransportError> {
+        if let Some(error) = self.reconcile_error.lock().unwrap().clone() {
+            return Err(error);
+        }
         Ok(ReconcileReadyStateResponse {
             action: self.reconcile_action.lock().unwrap().clone(),
             cursor: Some(42),
@@ -201,10 +212,6 @@ impl SyncTransport for FakePorts {
 #[async_trait]
 impl CredentialStore for FakePorts {
     fn has_cloud_session(&self) -> Result<bool, String> {
-        Ok(true)
-    }
-
-    async fn is_sync_allowed(&self) -> Result<bool, String> {
         Ok(true)
     }
 
@@ -317,6 +324,13 @@ impl RestorePorts for FakePorts {
 
     async fn clear_freshness_gate(&self, _device_id: &str) {}
 
+    async fn snapshot_is_empty(&self, _: Vec<u8>) -> Result<bool, String> {
+        if self.empty_check_fails.load(Ordering::SeqCst) {
+            return Err("scratch directory unavailable".to_string());
+        }
+        Ok(self.remote_empty.load(Ordering::SeqCst))
+    }
+
     fn local_rows(&self) -> Result<i64, String> {
         Ok(self.local_rows.load(Ordering::SeqCst))
     }
@@ -351,6 +365,7 @@ impl RestorePorts for FakePorts {
         if self.replace_fails.load(Ordering::SeqCst) {
             return Err("foreign key violation".to_string());
         }
+        *self.restored_tables.lock().unwrap() = snapshot.tables.to_vec();
         let id = String::from_utf8_lossy(&image[16..]).to_string();
         self.replacements
             .lock()
@@ -1009,4 +1024,96 @@ async fn pairing_waits_for_fresh_broker_data_even_when_the_cursor_is_unchanged()
     wait_for_phase(&runtime, RestorePhase::Ready).await;
     assert_eq!(ports.downloads(), vec!["fresh-broker-data"]);
     assert_eq!(ports.replacements()[0].1, 42);
+}
+
+#[tokio::test]
+async fn pairing_setup_orders_preserve_destructive_consent_and_empty_source_warning() {
+    for (local_rows, remote_empty) in [(0, false), (12, true)] {
+        let runtime = Arc::new(DeviceSyncRuntimeState::new());
+        let ports = Arc::new(FakePorts::new(local_rows));
+        ports.remote_empty.store(remote_empty, Ordering::SeqCst);
+        runtime
+            .start_restore(ports.clone(), StartRestore::Pairing)
+            .await
+            .unwrap();
+        let operation = wait_for_phase(
+            &runtime,
+            if local_rows > 0 {
+                RestorePhase::AwaitingConsent
+            } else {
+                RestorePhase::Ready
+            },
+        )
+        .await;
+        assert_eq!(operation.snapshot.unwrap().is_empty, Some(remote_empty));
+        assert_eq!(
+            ports.replacements.lock().unwrap().len(),
+            usize::from(local_rows == 0)
+        );
+        if local_rows > 0 {
+            assert_eq!(
+                ports.backups.load(Ordering::SeqCst),
+                0,
+                "nothing happens before consent"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn restore_ignores_plaintext_table_list_when_selecting_local_tables() {
+    for tables in [
+        vec!["accounts".to_string()],
+        vec![],
+        vec!["invented".to_string()],
+    ] {
+        let ports = Arc::new(FakePorts::new(0));
+        ports.snapshots.lock().unwrap()[0].meta.covers_tables = tables;
+        let runtime = runtime();
+        start(&runtime, &ports, StartRestore::Pairing).await;
+        let ready = wait_for_phase(&runtime, RestorePhase::Ready).await;
+        assert!(ready.replaced);
+        assert_eq!(
+            *ports.restored_tables.lock().unwrap(),
+            wealthfolio_core::sync::APP_SYNC_TABLES
+                .iter()
+                .map(|table| table.to_string())
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[tokio::test]
+async fn optional_empty_snapshot_inspection_failure_still_requires_replacement_consent() {
+    let runtime = runtime();
+    let ports = Arc::new(FakePorts::new(12));
+    ports.empty_check_fails.store(true, Ordering::SeqCst);
+    start(&runtime, &ports, StartRestore::Pairing).await;
+    let operation = wait_for_phase(&runtime, RestorePhase::AwaitingConsent).await;
+    assert_eq!(operation.snapshot.unwrap().is_empty, None);
+    assert!(ports.replacements().is_empty());
+    assert_eq!(ports.backups.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn restore_domain_denials_stop_before_download_or_replacement() {
+    for (code, expected) in [(
+        "SUBSCRIPTION_CANCELED",
+        RestoreErrorCode::SubscriptionRequired,
+    )] {
+        let ports = Arc::new(FakePorts::new(5));
+        *ports.reconcile_error.lock().unwrap() = Some(TransportError {
+            message: "Request denied".into(),
+            retry_class: ApiRetryClass::Permanent,
+            error_code: Some(code.into()),
+            details: None,
+        });
+        let runtime = runtime();
+        start(&runtime, &ports, StartRestore::Recurring).await;
+        let failed = wait_for_phase(&runtime, RestorePhase::Failed).await;
+        assert_eq!(failed.error.unwrap().code, expected);
+        assert!(ports.downloads().is_empty());
+        assert_eq!(ports.backups.load(Ordering::SeqCst), 0);
+        assert!(ports.replacements.lock().unwrap().is_empty());
+    }
 }

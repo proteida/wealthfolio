@@ -39,10 +39,10 @@
     "rails": {
       "target_allocation": "Target allocation",
       "details": "Details",
-      "suggested_moves": "Suggested moves",
-      "all_in_range": "All categories inside target range — no rebalancing needed",
-      "add": "Add",
-      "trim": "Trim",
+      "target_differences": "Differences from target",
+      "all_in_range": "All categories are inside their target range.",
+      "below_target_by": "{{amount}} below target",
+      "above_target_by": "{{amount}} above target",
       "inside_target_range": "Inside target range",
       "outside_range": "{{count}} outside range · largest gap {{gap}}",
       "tolerance": "tolerance {{tolerance}}",
@@ -79,7 +79,6 @@
       "link_explanation": "Linking an existing property does not change your net worth."
     },
     "failed_to_load": "Failed to load net worth",
-    "stale_valuations_tooltip": "Stale valuations (90+ days):",
     "days_ago": "{{count}}d ago",
     "no_history_data": "No history data available",
     "breakdown": "Breakdown",

@@ -18,8 +18,8 @@
 //! 3. `<executable-dir>/wealthfolio.env` — sidecar fallback for portable and
 //!    development layouts.
 //!
-//! Precedence (highest first): process environment > CWD `.env` (loaded by
-//! each binary's existing `dotenvy` call *after* [`load`]) > this file >
+//! Precedence (highest first): process environment > this file > CWD `.env`
+//! (each binary's `dotenvy` call after [`load`] fills only unset values) >
 //! compile-time baked values (`option_env!`) > built-in defaults.
 //!
 //! Rules: a missing file is fine (process env and defaults apply); a
