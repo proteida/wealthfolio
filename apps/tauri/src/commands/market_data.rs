@@ -1,6 +1,7 @@
 use crate::profiles::ProfileAccess;
 use std::collections::HashMap;
 use wealthfolio_core::events::DomainEvent;
+use wealthfolio_core::health::HealthServiceTrait;
 
 use crate::events::{
     emit_portfolio_trigger_recalculate, emit_portfolio_trigger_update, PortfolioRequestPayload,
@@ -162,6 +163,8 @@ pub async fn update_quote(
         .await
         .map(|_| ())
         .map_err(|e| e.to_string())?;
+    // A new value can end a stale valuation in Health Center.
+    context.health_service().clear_cache().await;
 
     // Manual quote update - no market sync needed, but force full recalculation
     // so historical valuations are recomputed with the updated quotes
@@ -189,6 +192,8 @@ pub async fn delete_quote(
         .delete_quote(&id)
         .await
         .map_err(|e| e.to_string())?;
+    // Removing a value can make an asset's valuation stale in Health Center.
+    context.health_service().clear_cache().await;
 
     // Manual quote deletion - no market sync needed, but force full recalculation
     // so historical valuations are recomputed without the deleted quotes
@@ -266,7 +271,6 @@ pub async fn import_quotes_csv(
     quotes: Vec<QuoteImport>,
     overwrite_existing: bool,
     state: ProfileAccess,
-    handle: AppHandle,
 ) -> Result<Vec<QuoteImport>, String> {
     let context = state.context()?;
     debug!(
@@ -274,27 +278,15 @@ pub async fn import_quotes_csv(
         quotes.len(),
         overwrite_existing
     );
-    let result = context
+    // The quote service emits PriceHistoryChanged when the batch saves quotes.
+    context
         .quote_service()
         .import_quotes(quotes, overwrite_existing)
         .await
         .map_err(|e| {
             error!("TAURI COMMAND: import_quotes_csv failed: {}", e);
             format!("Failed to import CSV quotes: {}", e)
-        })?;
-
-    // Quote import - no market sync needed, just recalculate
-    let handle = handle.clone();
-    tauri::async_runtime::spawn(async move {
-        debug!("Triggering portfolio recalculation after quote import");
-        let payload = PortfolioRequestPayload::builder()
-            .account_ids(None)
-            .market_sync_mode(MarketSyncMode::None)
-            .build();
-        emit_portfolio_trigger_recalculate(&handle, payload, &context);
-    });
-
-    Ok(result)
+        })
 }
 
 #[tauri::command]
@@ -304,6 +296,7 @@ pub async fn resolve_symbol_quote(
     instrument_type: Option<String>,
     quote_ccy: Option<String>,
     provider_id: Option<String>,
+    provider_symbol: Option<String>,
     state: ProfileAccess,
 ) -> Result<wealthfolio_core::quotes::ResolvedQuote, String> {
     let context = state.context()?;
@@ -318,6 +311,7 @@ pub async fn resolve_symbol_quote(
             inst_type.as_ref(),
             quote_ccy.as_deref(),
             provider_id.as_deref(),
+            provider_symbol.as_deref(),
         )
         .await
         .map_err(|e| format!("Failed to resolve symbol quote: {}", e))

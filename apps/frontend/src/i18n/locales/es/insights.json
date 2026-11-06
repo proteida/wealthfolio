@@ -39,10 +39,10 @@
     "rails": {
       "target_allocation": "Asignación objetivo",
       "details": "Detalles",
-      "suggested_moves": "Movimientos sugeridos",
-      "all_in_range": "Todas las categorías dentro del rango objetivo — no se necesita reequilibrar",
-      "add": "Añadir",
-      "trim": "Reducir",
+      "target_differences": "Diferencias con el objetivo",
+      "all_in_range": "Todas las categorías están dentro de su rango objetivo.",
+      "below_target_by": "{{amount}} por debajo del objetivo",
+      "above_target_by": "{{amount}} por encima del objetivo",
       "inside_target_range": "Dentro del rango objetivo",
       "outside_range": "{{count}} fuera de rango · mayor diferencia {{gap}}",
       "tolerance": "tolerancia {{tolerance}}",
@@ -82,7 +82,6 @@
       "link_explanation": "Vincular una propiedad existente no cambia tu patrimonio neto."
     },
     "failed_to_load": "No se pudo cargar el patrimonio neto",
-    "stale_valuations_tooltip": "Valoraciones desactualizadas (más de 90 días):",
     "days_ago": "hace {{count}} d",
     "no_history_data": "No hay datos de historial disponibles",
     "breakdown": "Desglose",

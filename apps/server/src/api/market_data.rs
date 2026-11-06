@@ -13,7 +13,6 @@ use axum::{
     Json, Router,
 };
 use wealthfolio_core::assets::InstrumentType;
-use wealthfolio_core::portfolio::{snapshot::SnapshotRecalcMode, valuation::ValuationRecalcMode};
 use wealthfolio_core::quotes::{
     FetchDividendsParams, LatestQuoteSnapshot, MarketSyncMode, ProviderInfo, Quote, QuoteImport,
     SymbolSearchResult,
@@ -169,6 +168,8 @@ async fn update_quote(
     // Ensure asset_id matches path parameter
     quote.asset_id = symbol;
     state.quote_service.update_quote(quote).await?;
+    // A new value can end a stale valuation in Health Center.
+    state.health_service.clear_cache().await;
     // Manual quote update - no market sync needed, but force full recalculation
     // so historical valuations are recomputed with the updated quotes
     enqueue_portfolio_job(
@@ -176,9 +177,7 @@ async fn update_quote(
         PortfolioJobConfig {
             account_ids: None,
             market_sync_mode: MarketSyncMode::None,
-            snapshot_mode: SnapshotRecalcMode::Full,
-            valuation_mode: ValuationRecalcMode::Full,
-            since_date: None,
+            force_full: false,
         },
     );
     Ok(StatusCode::NO_CONTENT)
@@ -189,6 +188,8 @@ async fn delete_quote(
     axum::Extension(state): axum::Extension<Arc<AppState>>,
 ) -> ApiResult<StatusCode> {
     state.quote_service.delete_quote(&id).await?;
+    // Removing a value can make an asset's valuation stale in Health Center.
+    state.health_service.clear_cache().await;
     // Manual quote deletion - no market sync needed, but force full recalculation
     // so historical valuations are recomputed without the deleted quotes
     enqueue_portfolio_job(
@@ -196,9 +197,7 @@ async fn delete_quote(
         PortfolioJobConfig {
             account_ids: None,
             market_sync_mode: MarketSyncMode::None,
-            snapshot_mode: SnapshotRecalcMode::Full,
-            valuation_mode: ValuationRecalcMode::Full,
-            since_date: None,
+            force_full: false,
         },
     );
     Ok(StatusCode::NO_CONTENT)
@@ -255,24 +254,11 @@ async fn import_quotes_csv(
     axum::Extension(state): axum::Extension<Arc<AppState>>,
     Json(body): Json<ImportQuotesBody>,
 ) -> ApiResult<Json<Vec<QuoteImport>>> {
+    // The quote service emits PriceHistoryChanged when the batch saves quotes.
     let result = state
         .quote_service
         .import_quotes(body.quotes, body.overwrite_existing)
         .await?;
-
-    // Quote import - no market sync needed, but force full recalculation
-    // so historical valuations are recomputed with the imported quotes
-    enqueue_portfolio_job(
-        state,
-        PortfolioJobConfig {
-            account_ids: None,
-            market_sync_mode: MarketSyncMode::None,
-            snapshot_mode: SnapshotRecalcMode::Full,
-            valuation_mode: ValuationRecalcMode::Full,
-            since_date: None,
-        },
-    );
-
     Ok(Json(result))
 }
 
@@ -312,9 +298,7 @@ async fn sync_market_data(
         PortfolioJobConfig {
             account_ids: None,
             market_sync_mode,
-            snapshot_mode: SnapshotRecalcMode::IncrementalFromLast,
-            valuation_mode: ValuationRecalcMode::IncrementalFromLast,
-            since_date: None,
+            ..PortfolioJobConfig::default()
         },
     );
     Ok(StatusCode::NO_CONTENT)
@@ -344,6 +328,7 @@ struct ResolveSymbolQuoteQuery {
     instrument_type: Option<String>,
     quote_ccy: Option<String>,
     provider_id: Option<String>,
+    provider_symbol: Option<String>,
 }
 
 async fn resolve_symbol_quote(
@@ -362,6 +347,7 @@ async fn resolve_symbol_quote(
             inst_type.as_ref(),
             q.quote_ccy.as_deref(),
             q.provider_id.as_deref(),
+            q.provider_symbol.as_deref(),
         )
         .await?;
     Ok(Json(res))

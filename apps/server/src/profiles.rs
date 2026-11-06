@@ -79,6 +79,8 @@ pub struct WebProfiles {
     auth: Option<Arc<crate::auth::AuthManager>>,
     pub(crate) oidc: Option<Arc<crate::oidc::OidcManager>>,
     runtimes: Mutex<HashMap<Uuid, Arc<AppState>>>,
+    // Keep slow startup serialized without blocking cached runtime lookups.
+    initialization: Arc<Mutex<()>>,
     mcp: Mutex<HashMap<Uuid, Router>>,
     visited: std::sync::Mutex<std::collections::HashSet<String>>,
 }
@@ -143,6 +145,7 @@ impl WebProfiles {
             oidc: auth.oidc,
             deletion: Mutex::new(()),
             runtimes: Mutex::new(HashMap::new()),
+            initialization: Arc::new(Mutex::new(())),
             mcp: Mutex::new(HashMap::new()),
             visited: std::sync::Mutex::new(Default::default()),
         }))
@@ -176,8 +179,12 @@ impl WebProfiles {
         }
         self.visited.lock().map_err(failure)?.insert(owner);
         self.mcp.lock().await.remove(&id);
-        let runtime = self.runtimes.lock().await.remove(&id);
+        let runtime = {
+            let _initialization = self.initialization.lock().await;
+            self.runtimes.lock().await.remove(&id)
+        };
         if let Some(runtime) = runtime {
+            runtime.backup_scheduler.set_paused(true);
             let _lifecycle = runtime.profile_lifecycle.lock().await;
             let workers = std::mem::take(&mut *runtime.workers.lock().map_err(failure)?);
             for worker in workers {
@@ -251,6 +258,7 @@ impl WebProfiles {
             config: config.clone(),
             deletion: Mutex::new(()),
             runtimes: Mutex::new(runtimes),
+            initialization: Arc::new(Mutex::new(())),
             mcp: Mutex::new(HashMap::new()),
             visited: std::sync::Mutex::new(Default::default()),
         }))
@@ -286,12 +294,37 @@ impl WebProfiles {
         }
     }
 
-    pub async fn runtime(&self, id: Uuid) -> Result<Arc<AppState>> {
-        let mut runtimes = self.runtimes.lock().await;
+    pub async fn runtime(self: &Arc<Self>, id: Uuid) -> Result<Arc<AppState>> {
+        {
+            let runtimes = self.runtimes.lock().await;
+            self.registry.profile(id).map_err(failure)?;
+            if let Some(runtime) = runtimes.get(&id) {
+                return Ok(runtime.clone());
+            }
+        }
+        let initialization = self.initialization.clone().lock_owned().await;
+        // A waiting open may have been initialized or marked for deletion.
         let profile = self.registry.profile(id).map_err(failure)?;
-        if let Some(runtime) = runtimes.get(&id) {
+        if let Some(runtime) = self.runtimes.lock().await.get(&id) {
             return Ok(runtime.clone());
         }
+        // A disconnected client drops this future. Startup runs in its own task,
+        // keeping the lock, so the next open waits for it instead of finding the
+        // database lock held.
+        let root = self.clone();
+        tokio::spawn(async move {
+            let _initialization = initialization;
+            root.start_runtime(id, profile).await
+        })
+        .await
+        .map_err(|error| startup_failure("runtime_initialization", error.into()))?
+    }
+
+    async fn start_runtime(
+        &self,
+        id: Uuid,
+        profile: wealthfolio_core::profiles::Profile,
+    ) -> Result<Arc<AppState>> {
         let paths = self.registry.paths(&profile);
         if profile.legacy_database.is_some() && !paths.database.is_file() {
             return Err(startup_failure("legacy_database", anyhow::anyhow!("The legacy profile database is missing. Restore its file before opening this profile; existing credentials were preserved.")));
@@ -307,7 +340,7 @@ impl WebProfiles {
             .await
             .map_err(|error| startup_failure("runtime_initialization", error))?;
         let _ = runtime.profile_binding.set((self.registry.clone(), id));
-        runtimes.insert(id, runtime.clone());
+        self.runtimes.lock().await.insert(id, runtime.clone());
         crate::scheduler::start_background_workers(runtime.clone());
         Ok(runtime)
     }

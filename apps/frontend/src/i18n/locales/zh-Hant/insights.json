@@ -39,10 +39,10 @@
     "rails": {
       "target_allocation": "目標資產配置",
       "details": "詳細資訊",
-      "suggested_moves": "建議操作",
-      "all_in_range": "所有類別都在目標區間內，不需再平衡",
-      "add": "增持",
-      "trim": "減持",
+      "target_differences": "與目標的差異",
+      "all_in_range": "所有類別都在目標區間內。",
+      "below_target_by": "低於目標 {{amount}}",
+      "above_target_by": "高於目標 {{amount}}",
       "inside_target_range": "在目標區間內",
       "outside_range": "{{count}} 項超出區間 · 最大偏差 {{gap}}",
       "tolerance": "容差 {{tolerance}}",
@@ -79,7 +79,6 @@
       "link_explanation": "關聯現有房產不會改變您的淨資產。"
     },
     "failed_to_load": "載入淨資產失敗",
-    "stale_valuations_tooltip": "過期估值（90 天以上）：",
     "days_ago": "{{count}} 天前",
     "no_history_data": "尚無可用的歷史資料",
     "breakdown": "明細",

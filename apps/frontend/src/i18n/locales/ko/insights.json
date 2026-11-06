@@ -39,10 +39,10 @@
     "rails": {
       "target_allocation": "목표 배분",
       "details": "세부정보",
-      "suggested_moves": "제안된 조치",
-      "all_in_range": "모든 카테고리가 목표 범위 내에 있습니다 — 리밸런싱이 필요하지 않습니다",
-      "add": "추가",
-      "trim": "축소",
+      "target_differences": "목표와의 차이",
+      "all_in_range": "모든 카테고리가 목표 범위 내에 있습니다.",
+      "below_target_by": "목표보다 {{amount}} 낮음",
+      "above_target_by": "목표보다 {{amount}} 높음",
       "inside_target_range": "목표 범위 내",
       "outside_range": "{{count}}개 범위 벗어남 · 최대 격차 {{gap}}",
       "tolerance": "허용 오차 {{tolerance}}",
@@ -78,7 +78,6 @@
       "link_explanation": "기존 부동산을 연결해도 순자산은 바뀌지 않습니다."
     },
     "failed_to_load": "순자산을 불러오지 못했습니다",
-    "stale_valuations_tooltip": "오래된 평가 (90일 이상):",
     "days_ago": "{{count}}일 전",
     "no_history_data": "사용 가능한 이력 데이터가 없습니다",
     "breakdown": "세부 내역",
