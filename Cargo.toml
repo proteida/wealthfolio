@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "3.12.0-selfhosted.1"
+version = "3.12.0-selfhosted.2"
 edition = "2021"
 license = "AGPL-3.0"
 

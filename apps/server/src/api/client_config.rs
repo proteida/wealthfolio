@@ -76,7 +76,7 @@ struct ClientConfigShape {
 /// pre-auth) and read-only.
 async fn get_client_config() -> Json<ClientConfigShape> {
     let cfg = connect_client_config();
-    let connect = cfg.has_any().then(|| ConnectClientShape {
+    let connect = cfg.has_any().then_some(ConnectClientShape {
         api_url: cfg.api_url,
         auth_url: cfg.auth_url,
         auth_publishable_key: cfg.auth_publishable_key,
